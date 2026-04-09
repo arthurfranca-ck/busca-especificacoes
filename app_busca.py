@@ -181,7 +181,16 @@ def _tavily_search(produto: str, missing: list[str]) -> tuple[str, dict[str, str
     if not tavily_client:
         return "", {}
     try:
-        query = f"{produto} especificações técnicas {' '.join(missing)}"
+        field_terms = {
+            "potencia_w": "potência watts kW corrente amperes",
+            "voltagem_v": "voltagem tensão volts",
+            "consumo_kwh": "consumo energia kWh",
+            "btu": "BTU capacidade refrigeração",
+            "fase": "monofásico trifásico fase",
+            "consumo_gas": "consumo gás kg/h m³/h",
+        }
+        terms = " ".join(field_terms.get(f, f) for f in missing)
+        query = f"{produto} especificações técnicas {terms}"
         response = tavily_client.search(
             query=query,
             search_depth="advanced",
@@ -233,17 +242,17 @@ def _map_field_source(field_label: str, sources: dict) -> str:
 
 def enrich_with_ai(result: dict) -> dict:
     """Quando o scraper nao encontra specs, busca via Tavily + Groq."""
+    field_labels = {
+        "potencia_w": "Potencia (W, kW, HP, CV, VA ou corrente em Amperes)",
+        "voltagem_v": "Voltagem (V)",
+        "fase": "Fase (monofasico/bifasico/trifasico)",
+        "consumo_kwh": "Consumo (kWh/mes, kWh/dia, kWh/ano)",
+        "btu": "BTU (ou TR, kcal/h, kW frigorifico)",
+    }
     missing = []
-    if not result.get("potencia_w"):
-        missing.append("Potencia (W)")
-    if not result.get("voltagem_v"):
-        missing.append("Voltagem (V)")
-    if not result.get("fase"):
-        missing.append("Fase (monofasico/bifasico/trifasico)")
-    if not result.get("consumo_kwh"):
-        missing.append("Consumo (kWh)")
-    if not result.get("btu"):
-        missing.append("BTU")
+    for field, label in field_labels.items():
+        if not result.get(field):
+            missing.append(label)
 
     if not missing:
         return result
@@ -252,24 +261,36 @@ def enrich_with_ai(result: dict) -> dict:
 
     tavily_content, tavily_sources = _tavily_search(produto, missing)
 
+    calc_hint = (
+        "IMPORTANTE: Se encontrar corrente (Amperes) e voltagem mas NAO potencia em Watts, "
+        "calcule: Potencia = Voltagem x Corrente. Ex: 1.5A x 220V = 330W. "
+        "Se encontrar kW, converta: 1 kW = 1000 W. "
+        "Se encontrar HP, converta: 1 HP = 746 W. "
+        "Se encontrar consumo kWh/dia, converta para kWh/mes multiplicando por 30. "
+        "Se encontrar kWh/ano, divida por 12 para kWh/mes. "
+        "Sempre retorne potencia em Watts e consumo em kWh/mes."
+    )
+
+    json_example = '{{"potencia_w": "150 W", "voltagem_v": "220 V", "fase": "Monofasico", "consumo_kwh": "45 kWh/mes", "btu": null}}'
+
     if tavily_content and HAS_GEMINI:
         prompt = (
             f"Analise os dados abaixo sobre o equipamento '{produto}' e extraia: {', '.join(missing)}.\n"
+            f"{calc_hint}\n"
             f"Dados encontrados na internet:\n{tavily_content[:3000]}\n\n"
             f"Responda APENAS em formato JSON com as chaves: "
             f"potencia_w, voltagem_v, fase, consumo_kwh, btu. "
-            f"Se nao encontrar nos dados, coloque null. Exemplo: "
-            f'{{"potencia_w": "150 W", "voltagem_v": "220 V", "fase": "Monofasico", "consumo_kwh": "45 kWh/mes", "btu": null}}'
+            f"Se nao encontrar nos dados, coloque null. Exemplo: {json_example}"
         )
         source_label = "IA + Fonte web"
     elif HAS_GEMINI:
         prompt = (
             f"Para o equipamento '{produto}', nao consegui encontrar: {', '.join(missing)}. "
             f"Com base no modelo e marca, estime os valores mais provaveis. "
+            f"{calc_hint}\n"
             f"Responda APENAS em formato JSON com as chaves: "
             f"potencia_w, voltagem_v, fase, consumo_kwh, btu. "
-            f"Se nao souber, coloque null. Exemplo: "
-            f'{{"potencia_w": "150 W", "voltagem_v": "220 V", "fase": "Monofasico", "consumo_kwh": "45 kWh/mes", "btu": null}}'
+            f"Se nao souber, coloque null. Exemplo: {json_example}"
         )
         source_label = "Estimativa IA"
     else:

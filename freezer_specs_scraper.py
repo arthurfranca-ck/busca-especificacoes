@@ -100,13 +100,13 @@ EQUIPMENT_CONTEXT_KEYWORDS = [
 ]
 
 QUERY_TEMPLATES = [
-    "{product} especificações técnicas potência watts voltagem",
-    "{product} ficha técnica",
-    "{product} especificações potência consumo",
-    "{product} datasheet specifications power watts voltage",
-    "{product} manual técnico watts volts",
+    "{product} especificações técnicas potência watts voltagem corrente",
+    "{product} ficha técnica especificações",
+    "{product} especificações potência consumo amperes",
+    "{product} datasheet specifications power watts voltage amps",
+    "{product} manual técnico watts volts amperes",
     "{product} especificaciones técnicas potencia watts voltaje",
-    "{product} ficha técnica BTU capacidade",
+    "{product} ficha técnica BTU capacidade kW",
     "{product} especificações técnicas equipamento comercial",
 ]
 
@@ -765,7 +765,7 @@ def google_search_multi(product: str, max_results: int = 10) -> list[str]:
     if not all_urls and HAS_GOOGLE:
         print(" [Google lib]", end="", flush=True)
         for product_variant in queries[:2]:
-            for template in QUERY_TEMPLATES[:1]:
+            for template in QUERY_TEMPLATES[:3]:
                 query = template.format(product=product_variant)
                 try:
                     results = list(_google_search(query, num_results=max_results, lang="pt"))
@@ -776,7 +776,9 @@ def google_search_multi(product: str, max_results: int = 10) -> list[str]:
                     time.sleep(random.uniform(2, 4))
                 except Exception:
                     break
-            if all_urls:
+                if len(all_urls) >= max_results:
+                    break
+            if len(all_urls) >= max_results:
                 break
         print(f" {len(all_urls)}", end="", flush=True)
 
