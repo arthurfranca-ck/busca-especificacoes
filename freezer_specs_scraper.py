@@ -1219,16 +1219,17 @@ def _normalize_consumption(value: str) -> Optional[str]:
     val_lower = value.lower()
     if any(k in val_lower for k in ("/ano", "/year", "/yr", "anual", "annual")):
         monthly = round(num / 12, 1)
-        if 0.5 <= monthly <= 5000:
+        if monthly >= 0.1:
             return f"{monthly} kWh/mês (= {num_str} kWh/ano)"
-    elif any(k in val_lower for k in ("/dia", "/day", "/24h", "diário", "diario", "daily")):
-        if "wh" in val_lower and "kwh" not in val_lower:
+    elif any(k in val_lower for k in ("/dia", "/day", "/24h", "/24 h", "diário", "diario", "daily")):
+        is_wh = "wh" in val_lower and "kwh" not in val_lower
+        if is_wh:
             num = num / 1000
         monthly = round(num * 30, 1)
-        if 0.5 <= monthly <= 5000:
-            return f"{monthly} kWh/mês (= {num_str}/dia)"
+        if monthly >= 0.1:
+            return f"{monthly} kWh/mês (= {num_str} {'Wh' if is_wh else 'kWh'}/dia)"
     else:
-        if 0.5 <= num <= 5000:
+        if num >= 0.1:
             return f"{num_str} kWh/mês"
     return None
 
@@ -1380,28 +1381,18 @@ def find_voltage(text: str) -> Optional[str]:
 
 
 def find_consumption(text: str) -> Optional[str]:
-    for pattern in CONSUMPTION_PATTERNS_MONTHLY:
-        match = re.search(pattern, text)
-        if match:
-            value = match.group(1).replace(",", ".")
-            try:
-                num = float(value)
-                if 0.5 <= num <= 5000:
-                    return f"{value} kWh/mês"
-            except ValueError:
-                continue
-
     for pattern in CONSUMPTION_PATTERNS_DAILY:
         match = re.search(pattern, text)
         if match:
             value = match.group(1).replace(",", ".")
             try:
                 num = float(value)
-                if "wh/" in match.group(0).lower() and "kwh" not in match.group(0).lower():
+                is_wh = "wh/" in match.group(0).lower() and "kwh" not in match.group(0).lower()
+                if is_wh:
                     num = num / 1000
                 monthly = round(num * 30, 1)
-                if 0.5 <= monthly <= 5000:
-                    return f"{monthly} kWh/mês (= {value} {'Wh' if num != float(value) else 'kWh'}/dia)"
+                if monthly >= 0.1:
+                    return f"{monthly} kWh/mês (= {value} {'Wh' if is_wh else 'kWh'}/dia)"
             except ValueError:
                 continue
 
@@ -1412,8 +1403,19 @@ def find_consumption(text: str) -> Optional[str]:
             try:
                 yearly = float(value)
                 monthly = round(yearly / 12, 1)
-                if 0.5 <= monthly <= 5000:
+                if monthly >= 0.1:
                     return f"{monthly} kWh/mês (= {value} kWh/ano)"
+            except ValueError:
+                continue
+
+    for pattern in CONSUMPTION_PATTERNS_MONTHLY:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1).replace(",", ".")
+            try:
+                num = float(value)
+                if num >= 0.1:
+                    return f"{value} kWh/mês"
             except ValueError:
                 continue
 
@@ -1590,31 +1592,59 @@ def check_page_relevance(html: str, product_name: str, min_keywords: int = 2) ->
 # Extração combinada
 # ---------------------------------------------------------------------------
 
+def _cross_validate(result: dict) -> dict:
+    """Validação cruzada entre campos para corrigir inconsistências."""
+    voltage = result.get("voltagem") or ""
+    phase = result.get("fase") or ""
+
+    if phase == "Trifásico":
+        v_nums = re.findall(r"\d+", voltage)
+        if v_nums:
+            max_v = max(int(v) for v in v_nums)
+            if max_v <= 220:
+                result["fase"] = "Monofásico"
+    elif phase == "Bifásico":
+        v_nums = re.findall(r"\d+", voltage)
+        if v_nums:
+            max_v = max(int(v) for v in v_nums)
+            if max_v <= 127:
+                result["fase"] = "Monofásico"
+
+    if not phase and voltage:
+        v_nums = re.findall(r"\d+", voltage)
+        if v_nums:
+            max_v = max(int(v) for v in v_nums)
+            if max_v >= 380:
+                result["fase"] = "Trifásico"
+            elif max_v <= 220:
+                result["fase"] = "Monofásico"
+
+    return result
+
+
 def extract_all_specs(html: str, product_name: Optional[str] = None) -> dict:
     """Executa todas as estratégias de extração e combina os resultados."""
     result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None}
 
-    # Verifica relevância se o nome do produto foi fornecido
     if product_name and not check_page_relevance(html, product_name):
         return result
 
-    # 1) JSON-LD (mais confiável se disponível)
     json_ld = extract_from_json_ld(html)
     for key in result:
         if json_ld.get(key) and not result[key]:
             result[key] = json_ld[key]
 
-    # 2) Tabelas de especificações
     table_specs = extract_from_spec_tables(html)
     for key in result:
         if table_specs.get(key) and not result[key]:
             result[key] = table_specs[key]
 
-    # 3) Regex em texto livre (fallback)
     text_specs = extract_from_text(html)
     for key in result:
         if text_specs.get(key) and not result[key]:
             result[key] = text_specs[key]
+
+    result = _cross_validate(result)
 
     return result
 
