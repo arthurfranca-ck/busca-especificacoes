@@ -496,17 +496,20 @@ with tab_single:
         st.success(f"Busca concluida em {elapsed:.0f} segundos")
 
         _pname = result.get("produto", "")
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
-            render_metric("Potencia (W)", result.get("potencia_w"), result.get("fonte_potencia"), _pname)
+            render_metric("Potencia", result.get("potencia_w"), result.get("fonte_potencia"), _pname)
         with col2:
-            render_metric("Voltagem (V)", result.get("voltagem_v"), result.get("fonte_voltagem"), _pname)
+            render_metric("Voltagem", result.get("voltagem_v"), result.get("fonte_voltagem"), _pname)
         with col3:
             render_metric("Fase", result.get("fase"), result.get("fonte_fase"), _pname)
         with col4:
-            render_metric("Consumo (kWh)", result.get("consumo_kwh"), result.get("fonte_consumo"), _pname)
+            render_metric("Consumo", result.get("consumo_kwh") or result.get("consumo_gas"), result.get("fonte_consumo") or result.get("fonte_consumo_gas"), _pname)
         with col5:
-            render_metric("BTU", result.get("btu"), result.get("fonte_btu"), _pname)
+            render_metric("BTU/kcal", result.get("btu"), result.get("fonte_btu"), _pname)
+        with col6:
+            if result.get("consumo_gas"):
+                render_metric("Gas", result.get("consumo_gas"), result.get("fonte_consumo_gas"), _pname)
 
         if HAS_GEMINI:
             if st.button("Analisar com IA", key="analyze_single", type="secondary"):
@@ -522,17 +525,20 @@ with tab_single:
     if not search_clicked and st.session_state.last_single_result and HAS_GEMINI:
         result = st.session_state.last_single_result
         _pname = result.get("produto", "")
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
-            render_metric("Potencia (W)", result.get("potencia_w"), result.get("fonte_potencia"), _pname)
+            render_metric("Potencia", result.get("potencia_w"), result.get("fonte_potencia"), _pname)
         with col2:
-            render_metric("Voltagem (V)", result.get("voltagem_v"), result.get("fonte_voltagem"), _pname)
+            render_metric("Voltagem", result.get("voltagem_v"), result.get("fonte_voltagem"), _pname)
         with col3:
             render_metric("Fase", result.get("fase"), result.get("fonte_fase"), _pname)
         with col4:
-            render_metric("Consumo (kWh)", result.get("consumo_kwh"), result.get("fonte_consumo"), _pname)
+            render_metric("Consumo", result.get("consumo_kwh") or result.get("consumo_gas"), result.get("fonte_consumo") or result.get("fonte_consumo_gas"), _pname)
         with col5:
-            render_metric("BTU", result.get("btu"), result.get("fonte_btu"), _pname)
+            render_metric("BTU/kcal", result.get("btu"), result.get("fonte_btu"), _pname)
+        with col6:
+            if result.get("consumo_gas"):
+                render_metric("Gas", result.get("consumo_gas"), result.get("fonte_consumo_gas"), _pname)
 
         if st.button("Analisar com IA", key="analyze_single_persist", type="secondary"):
             with st.spinner("Gerando analise com IA..."):
@@ -607,11 +613,12 @@ with tab_batch:
             df = pd.DataFrame(results)
             display_cols = {
                 "produto": "Equipamento",
-                "potencia_w": "Potencia (W)",
-                "voltagem_v": "Voltagem (V)",
+                "potencia_w": "Potencia",
+                "voltagem_v": "Voltagem",
                 "fase": "Fase",
                 "consumo_kwh": "Consumo (kWh)",
-                "btu": "BTU",
+                "consumo_gas": "Consumo Gas",
+                "btu": "BTU/kcal",
                 "fonte_potencia": "Fonte Potencia",
                 "fonte_voltagem": "Fonte Voltagem",
                 "tempo_busca": "Tempo",
@@ -653,11 +660,12 @@ with tab_batch:
 with tab_history:
     display_cols = {
         "produto": "Equipamento",
-        "potencia_w": "Potencia (W)",
-        "voltagem_v": "Voltagem (V)",
+        "potencia_w": "Potencia",
+        "voltagem_v": "Voltagem",
         "fase": "Fase",
         "consumo_kwh": "Consumo (kWh)",
-        "btu": "BTU",
+        "consumo_gas": "Consumo Gas",
+        "btu": "BTU/kcal",
         "fonte_potencia": "Fonte Potencia",
         "fonte_voltagem": "Fonte Voltagem",
         "data_hora": "Data/Hora",

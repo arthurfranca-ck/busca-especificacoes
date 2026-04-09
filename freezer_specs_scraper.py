@@ -247,11 +247,13 @@ class FreezerSpecs:
     consumo_kwh: Optional[str] = None
     btu: Optional[str] = None
     fase: Optional[str] = None
+    consumo_gas: Optional[str] = None
     fonte_potencia: Optional[str] = None
     fonte_voltagem: Optional[str] = None
     fonte_consumo: Optional[str] = None
     fonte_btu: Optional[str] = None
     fonte_fase: Optional[str] = None
+    fonte_consumo_gas: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +446,7 @@ def extract_text_from_pdf(pdf_path: str) -> Optional[str]:
 def extract_specs_from_pdf(url: str,
                            session: Optional[requests.Session] = None) -> dict:
     """Baixa um PDF, extrai texto e busca specs."""
-    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None}
+    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None}
     if not HAS_PDF:
         return result
 
@@ -461,6 +463,7 @@ def extract_specs_from_pdf(url: str,
     result["consumo"] = find_consumption(text)
     result["btu"] = find_btu(text)
     result["fase"] = find_phase(text)
+    result["consumo_gas"] = find_gas_consumption(text)
     return result
 
 
@@ -867,7 +870,7 @@ def get_all_search_urls(product: str) -> tuple[list[str], list[str]]:
 
 def extract_from_json_ld(html: str) -> dict:
     """Extrai specs de dados estruturados JSON-LD (schema.org)."""
-    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None}
+    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None}
 
     soup = BeautifulSoup(html, "html.parser")
     scripts = soup.find_all("script", type="application/ld+json")
@@ -941,7 +944,7 @@ SPEC_TABLE_KEYWORDS = [
 
 def extract_from_spec_tables(html: str) -> dict:
     """Busca tabelas de especificações no HTML."""
-    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None}
+    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None}
     soup = BeautifulSoup(html, "html.parser")
 
     tables = soup.find_all("table")
@@ -1007,6 +1010,12 @@ def _match_label_value(label: str, value: str, result: dict):
         if parsed and not result.get("fase"):
             result["fase"] = parsed
 
+    elif any(k in label for k in ("consumo de gás", "consumo de gas", "consumo gas",
+                                   "consumo gás", "vazão", "vazao", "gas consumption")):
+        parsed = find_gas_consumption(value)
+        if parsed and not result.get("consumo_gas"):
+            result["consumo_gas"] = parsed
+
 
 # ---------------------------------------------------------------------------
 # Extração — Regex em texto livre
@@ -1053,6 +1062,20 @@ BTU_PATTERNS = [
     r"BTU\s*[:\-–]?\s*(\d[\d.,]*)",
     r"[Cc]ooling\s*[Cc]apacity\s*[:\-–]?\s*(\d[\d.,]*)\s*BTU",
     r"[Pp]ot[êe]ncia\s*(?:frigor[íi]fica\s*)?[:\-–]?\s*(\d[\d.,]*)\s*BTU",
+]
+
+KCAL_PATTERNS = [
+    r"[Pp]ot[êe]ncia\s*(?:calor[íi]fica\s*)?(?:nominal\s*)?[:\-–]?\s*(\d[\d.,]*)\s*[Kk]cal/?[Hh]?",
+    r"(\d[\d.,]*)\s*[Kk]cal\s*/\s*[Hh]",
+    r"[Kk]cal\s*[:\-–]?\s*(\d[\d.,]*)",
+    r"[Cc]apacidade\s*(?:t[ée]rmica\s*)?[:\-–]?\s*(\d[\d.,]*)\s*[Kk]cal",
+]
+
+GAS_CONSUMPTION_PATTERNS = [
+    r"[Cc]onsumo\s*(?:de\s+)?[Gg][áa]s\s*(?:\(?\s*(?:GLP|GN)\s*\)?\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Gg]\s*/\s*[Hh]",
+    r"[Cc]onsumo\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Gg]\s*/\s*[Hh]",
+    r"(\d+[\.,]?\d*)\s*[Kk][Gg]\s*/\s*[Hh]\s*(?:\(?\s*(?:GLP|GN)\s*\)?)?",
+    r"[Vv]az[ãa]o\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Gg]\s*/\s*[Hh]",
 ]
 
 PHASE_PATTERNS = [
@@ -1137,6 +1160,17 @@ def find_power(text: str) -> Optional[str]:
             if result:
                 return result
 
+    for pattern in KCAL_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            raw = match.group(1).replace(".", "").replace(",", ".")
+            try:
+                kcal = float(raw)
+                if 500 <= kcal <= 500000:
+                    return f"{raw} kcal/h"
+            except ValueError:
+                continue
+
     return None
 
 
@@ -1185,6 +1219,31 @@ def find_btu(text: str) -> Optional[str]:
                     return f"{num:,} BTU/h".replace(",", ".")
             except ValueError:
                 pass
+    for pattern in KCAL_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            raw = match.group(1).replace(".", "").replace(",", ".")
+            try:
+                kcal = float(raw)
+                if 500 <= kcal <= 500000:
+                    btu = int(kcal * 3.968)
+                    return f"{btu:,} BTU/h ({raw} kcal/h)".replace(",", ".")
+            except ValueError:
+                pass
+    return None
+
+
+def find_gas_consumption(text: str) -> Optional[str]:
+    for pattern in GAS_CONSUMPTION_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1).replace(",", ".")
+            try:
+                num = float(value)
+                if 0.1 <= num <= 50:
+                    return f"{value} kg/h"
+            except ValueError:
+                pass
     return None
 
 
@@ -1204,6 +1263,7 @@ def extract_from_text(html: str) -> dict:
         "consumo": find_consumption(text),
         "btu": find_btu(text),
         "fase": find_phase(text),
+        "consumo_gas": find_gas_consumption(text),
     }
 
 
@@ -1218,6 +1278,8 @@ def _extract_from_text_to_result(text: str, result: dict):
         result["btu"] = find_btu(text)
     if not result.get("fase"):
         result["fase"] = find_phase(text)
+    if not result.get("consumo_gas"):
+        result["consumo_gas"] = find_gas_consumption(text)
 
 
 # ---------------------------------------------------------------------------
@@ -1256,7 +1318,7 @@ def check_page_relevance(html: str, product_name: str, min_keywords: int = 2) ->
 
 def extract_all_specs(html: str, product_name: Optional[str] = None) -> dict:
     """Executa todas as estratégias de extração e combina os resultados."""
-    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None}
+    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None}
 
     # Verifica relevância se o nome do produto foi fornecido
     if product_name and not check_page_relevance(html, product_name):
@@ -1314,6 +1376,10 @@ def _apply_result(specs: FreezerSpecs, result: dict, url: str) -> list[str]:
         specs.fase = result["fase"]
         specs.fonte_fase = url
         found.append(f"Fase={result['fase']}")
+    if result.get("consumo_gas") and not specs.consumo_gas:
+        specs.consumo_gas = result["consumo_gas"]
+        specs.fonte_consumo_gas = url
+        found.append(f"Gas={result['consumo_gas']}")
     return found
 
 
@@ -1455,6 +1521,7 @@ def _print_product_summary(specs: FreezerSpecs):
     print(f"    Voltagem:  {specs.voltagem_v or '❌ Não encontrada'}")
     print(f"    Fase:      {specs.fase or '–'}")
     print(f"    Consumo:   {specs.consumo_kwh or '❌ Não encontrado'}")
+    print(f"    Gas:       {specs.consumo_gas or '–'}")
     print(f"    BTU:       {specs.btu or '–'}")
     if specs.fonte_potencia:
         print(f"    Fonte (W): {specs.fonte_potencia[:80]}")
