@@ -417,7 +417,7 @@ if "last_batch_results" not in st.session_state:
 # ─── Header ───────────────────────────────────────────────────────────────────
 
 st.markdown('<p class="main-title">Busca de Especificacoes de Equipamentos</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Potencia (W) | Voltagem (V) | Consumo (kWh) | BTU</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-title">Potencia | Voltagem | Fase | Consumo | BTU/kcal | Gas</p>', unsafe_allow_html=True)
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 
