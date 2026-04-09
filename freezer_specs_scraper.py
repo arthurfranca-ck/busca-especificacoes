@@ -217,6 +217,16 @@ RETAIL_SEARCH_URLS = [
     ("Macom", "https://www.macom.com.br/?s={q}"),
     ("Rede Frio", "https://www.redefrio.com.br/?s={q}"),
     ("WebContinental", "https://www.webcontinental.com.br/busca?q={q}"),
+    ("Carmel Imports", "https://www.carmelimports.com.br/busca?q={q}"),
+    ("Loja Metalfrio", "https://www.lojametalfrio.com.br/{q}/"),
+    ("TemperFrio", "https://m.temperfrio.com.br/busca?q={q}"),
+    ("Nipomaq", "https://www.nipomaqsjp.com.br/catalogsearch/result/?q={q}"),
+    ("DC Equipamentos", "https://www.dcequipamentos.com.br/busca?q={q}"),
+    ("Marluci", "https://www.marluci.com.br/busca?q={q}"),
+    ("Atau", "https://www.atau.com.br/busca?q={q}"),
+    ("Alcamar", "https://www.alcamar.com.br/busca?q={q}"),
+    ("Varejao Maquinas", "https://www.varejaodasmaquinas.com/busca.php?q={q}"),
+    ("Quero Quero", "https://www.queroquero.com.br/busca?q={q}"),
     # Ar-condicionado especializados
     ("WebAr Condicionado", "https://www.webarcondicionado.com.br/busca?q={q}"),
     ("Loja do Mecanico", "https://www.lojadomecanico.com.br/busca?q={q}"),
@@ -1672,18 +1682,30 @@ def _cross_validate(result: dict) -> dict:
             if 5 <= watts <= 50000:
                 result["potencia"] = f"{watts} W (= {amps}A × {v_val}V)"
 
-    # --- Derivar potência de consumo diário (estimativa por ciclo) ---
+    # --- Derivar potência média de consumo diário ou mensal ---
     if not result.get("potencia") and result.get("consumo"):
         consumo = result["consumo"]
+        kwh_dia = None
+
         daily_match = re.search(r"=\s*([\d.,]+)\s*kWh/dia", consumo)
         if daily_match:
             try:
                 kwh_dia = float(daily_match.group(1).replace(",", "."))
-                watts_est = int(kwh_dia * 1000 / 8)
-                if 5 <= watts_est <= 50000:
-                    result["potencia"] = f"~{watts_est} W (estimativa: {kwh_dia} kWh/dia ÷ 8h)"
             except ValueError:
                 pass
+
+        if kwh_dia is None:
+            monthly_match = re.search(r"^([\d.,]+)\s*kWh/m", consumo)
+            if monthly_match:
+                try:
+                    kwh_dia = float(monthly_match.group(1).replace(",", ".")) / 30
+                except ValueError:
+                    pass
+
+        if kwh_dia and kwh_dia > 0:
+            watts_avg = int(kwh_dia * 1000 / 24)
+            if 5 <= watts_avg <= 50000:
+                result["potencia"] = f"~{watts_avg} W (média: {kwh_dia:.1f} kWh/dia ÷ 24h)"
 
     result.pop("corrente", None)
     return result
