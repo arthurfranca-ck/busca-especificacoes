@@ -446,7 +446,7 @@ def extract_text_from_pdf(pdf_path: str) -> Optional[str]:
 def extract_specs_from_pdf(url: str,
                            session: Optional[requests.Session] = None) -> dict:
     """Baixa um PDF, extrai texto e busca specs."""
-    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None}
+    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None, "corrente": None}
     if not HAS_PDF:
         return result
 
@@ -870,7 +870,7 @@ def get_all_search_urls(product: str) -> tuple[list[str], list[str]]:
 
 def extract_from_json_ld(html: str) -> dict:
     """Extrai specs de dados estruturados JSON-LD (schema.org)."""
-    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None}
+    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None, "corrente": None}
 
     soup = BeautifulSoup(html, "html.parser")
     scripts = soup.find_all("script", type="application/ld+json")
@@ -944,7 +944,7 @@ SPEC_TABLE_KEYWORDS = [
 
 def extract_from_spec_tables(html: str) -> dict:
     """Busca tabelas de especificações no HTML."""
-    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None}
+    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None, "corrente": None}
     soup = BeautifulSoup(html, "html.parser")
 
     tables = soup.find_all("table")
@@ -1025,6 +1025,18 @@ def _match_label_value(label: str, value: str, result: dict):
         parsed = find_gas_consumption(value)
         if parsed and not result.get("consumo_gas"):
             result["consumo_gas"] = parsed
+
+    elif any(k in label for k in ("corrente", "current", "ampere", "amperagem", "(a)")):
+        if any(gas_k in label for gas_k in ("gás", "gas")):
+            return
+        match = re.search(r"(\d+[\.,]?\d*)", value)
+        if match and not result.get("corrente"):
+            try:
+                amps = float(match.group(1).replace(",", "."))
+                if 0.1 <= amps <= 200:
+                    result["corrente"] = amps
+            except ValueError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -1128,6 +1140,14 @@ FRIGORIFICO_W_PATTERNS = [
     r"[Cc]ooling\s*[Cc]apacity\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww]",
     r"[Pp]ot[êe]ncia\s*frigor[íi]fica\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Ww]\b",
     r"[Cc]apacidade\s*frigor[íi]fica\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Ww]\b",
+]
+
+CURRENT_PATTERNS = [
+    r"[Cc]orrente\s*(?:nominal\s*)?(?:el[ée]trica\s*)?(?:\([Aa]\)\s*)?[:\-–\s]*(\d+[\.,]?\d*)\s*[Aa](?:mp(?:[eè]res?)?)?",
+    r"[Cc]urrent\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Aa](?:mp(?:s|eres?)?)?",
+    r"[Aa]mperagem\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Aa]?",
+    r"\b(\d+[\.,]?\d*)\s*[Aa]mp(?:[eè]res?)?\b",
+    r"[Cc]orrente\s*[:\-–]?\s*(\d+[\.,]?\d*)",
 ]
 
 KCAL_PATTERNS = [
@@ -1429,6 +1449,21 @@ def find_phase(text: str) -> Optional[str]:
     return None
 
 
+def find_current(text: str) -> Optional[float]:
+    """Extrai corrente em Amperes do texto. Retorna float ou None."""
+    for pattern in CURRENT_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1).replace(",", ".")
+            try:
+                amps = float(value)
+                if 0.1 <= amps <= 200:
+                    return amps
+            except ValueError:
+                continue
+    return None
+
+
 def find_btu(text: str) -> Optional[str]:
     for pattern in BTU_PATTERNS:
         match = re.search(pattern, text)
@@ -1540,6 +1575,7 @@ def extract_from_text(html: str) -> dict:
         "btu": find_btu(text),
         "fase": find_phase(text),
         "consumo_gas": find_gas_consumption(text),
+        "corrente": find_current(text),
     }
 
 
@@ -1556,6 +1592,8 @@ def _extract_from_text_to_result(text: str, result: dict):
         result["fase"] = find_phase(text)
     if not result.get("consumo_gas"):
         result["consumo_gas"] = find_gas_consumption(text)
+    if not result.get("corrente"):
+        result["corrente"] = find_current(text)
 
 
 # ---------------------------------------------------------------------------
@@ -1593,10 +1631,11 @@ def check_page_relevance(html: str, product_name: str, min_keywords: int = 2) ->
 # ---------------------------------------------------------------------------
 
 def _cross_validate(result: dict) -> dict:
-    """Validação cruzada entre campos para corrigir inconsistências."""
+    """Validação cruzada entre campos para corrigir inconsistências e derivar dados."""
     voltage = result.get("voltagem") or ""
     phase = result.get("fase") or ""
 
+    # --- Fase vs Voltagem ---
     if phase == "Trifásico":
         v_nums = re.findall(r"\d+", voltage)
         if v_nums:
@@ -1619,12 +1658,38 @@ def _cross_validate(result: dict) -> dict:
             elif max_v <= 220:
                 result["fase"] = "Monofásico"
 
+    # --- Derivar potência de Corrente × Voltagem (P = V × I) ---
+    if not result.get("potencia") and result.get("corrente") and voltage:
+        amps = result["corrente"]
+        v_nums = re.findall(r"\d+", voltage)
+        if v_nums:
+            v_val = max(int(v) for v in v_nums)
+            if "bivolt" in voltage.lower():
+                v_val = 220
+            watts = int(v_val * amps)
+            if 5 <= watts <= 50000:
+                result["potencia"] = f"{watts} W (= {amps}A × {v_val}V)"
+
+    # --- Derivar potência de consumo diário (estimativa por ciclo) ---
+    if not result.get("potencia") and result.get("consumo"):
+        consumo = result["consumo"]
+        daily_match = re.search(r"=\s*([\d.,]+)\s*kWh/dia", consumo)
+        if daily_match:
+            try:
+                kwh_dia = float(daily_match.group(1).replace(",", "."))
+                watts_est = int(kwh_dia * 1000 / 8)
+                if 5 <= watts_est <= 50000:
+                    result["potencia"] = f"~{watts_est} W (estimativa: {kwh_dia} kWh/dia ÷ 8h)"
+            except ValueError:
+                pass
+
+    result.pop("corrente", None)
     return result
 
 
 def extract_all_specs(html: str, product_name: Optional[str] = None) -> dict:
     """Executa todas as estratégias de extração e combina os resultados."""
-    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None}
+    result = {"potencia": None, "voltagem": None, "consumo": None, "btu": None, "fase": None, "consumo_gas": None, "corrente": None}
 
     if product_name and not check_page_relevance(html, product_name):
         return result
