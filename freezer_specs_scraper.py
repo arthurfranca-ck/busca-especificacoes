@@ -996,13 +996,19 @@ def _match_label_value(label: str, value: str, result: dict):
         if parsed and not result["voltagem"]:
             result["voltagem"] = parsed
 
-    elif any(k in label for k in ("consumo", "kwh", "energia", "consumption", "energy")):
+    elif any(k in label for k in ("consumo", "kwh", "wh", "energia", "consumption", "energy",
+                                   "consumo mensal", "consumo diário", "consumo diario",
+                                   "consumo anual", "annual energy", "energy use")):
+        if any(gas_k in label for gas_k in ("gás", "gas", "glp", "gn")):
+            return
         parsed = _normalize_consumption(value)
         if parsed and not result["consumo"]:
             result["consumo"] = parsed
 
     elif any(k in label for k in ("btu", "capacidade de refrigeração", "capacidade de refrigeracao",
-                                   "cooling capacity", "capacidade frigorífica", "capacidade frigorifica")):
+                                   "cooling capacity", "capacidade frigorífica", "capacidade frigorifica",
+                                   "potência frigorífica", "potencia frigorifica", "tonelada",
+                                   "capacidade térmica", "capacidade termica", "tr")):
         parsed = find_btu(value)
         if parsed and not result.get("btu"):
             result["btu"] = parsed
@@ -1013,7 +1019,9 @@ def _match_label_value(label: str, value: str, result: dict):
             result["fase"] = parsed
 
     elif any(k in label for k in ("consumo de gás", "consumo de gas", "consumo gas",
-                                   "consumo gás", "vazão", "vazao", "gas consumption")):
+                                   "consumo gás", "vazão", "vazao", "gas consumption",
+                                   "vazão de gás", "vazao de gas", "gas flow",
+                                   "consumo glp", "consumo gn")):
         parsed = find_gas_consumption(value)
         if parsed and not result.get("consumo_gas"):
             result["consumo_gas"] = parsed
@@ -1074,11 +1082,26 @@ VOLTAGE_PATTERNS = [
 
 BIVOLT_PATTERN = re.compile(r"\b[Bb]ivolt(?:e)?\b", re.IGNORECASE)
 
-CONSUMPTION_PATTERNS = [
-    r"[Cc]onsumo\s*(?:de\s+)?[Ee]nergia\s*(?:mensal\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh](?:/m[êe]s)?",
-    r"[Cc]onsumo\s*(?:mensal\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]",
+CONSUMPTION_PATTERNS_MONTHLY = [
+    r"[Cc]onsumo\s*(?:de\s+)?[Ee]nergia\s*(?:mensal\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]\s*/\s*m[êe]s",
+    r"[Cc]onsumo\s*(?:mensal\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]\s*/\s*m[êe]s",
     r"(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]\s*/\s*m[êe]s",
+    r"[Cc]onsumo\s*(?:de\s+)?[Ee]nergia\s*(?:mensal\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]",
+    r"[Cc]onsumo\s*(?:mensal\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]",
     r"[Ee]nergy\s*[Cc]onsumption\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]",
+]
+
+CONSUMPTION_PATTERNS_DAILY = [
+    r"[Cc]onsumo\s*(?:di[áa]rio\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]\s*/\s*(?:dia|24\s*[Hh])",
+    r"(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]\s*/\s*(?:dia|24\s*[Hh]|d)",
+    r"[Ee]nergy\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]\s*/\s*(?:day|24\s*[Hh])",
+    r"[Cc]onsumo\s*(?:di[áa]rio\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Ww][Hh]\s*/\s*(?:dia|d)",
+]
+
+CONSUMPTION_PATTERNS_YEARLY = [
+    r"[Cc]onsumo\s*(?:anual\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]\s*/\s*(?:ano|a[ñn]o|year|yr)",
+    r"(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]\s*/\s*(?:ano|a[ñn]o|year|yr)",
+    r"[Aa]nnual\s*[Ee]nergy\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww][Hh]",
 ]
 
 BTU_PATTERNS = [
@@ -1090,6 +1113,23 @@ BTU_PATTERNS = [
     r"[Pp]ot[êe]ncia\s*(?:frigor[íi]fica\s*)?[:\-–]?\s*(\d[\d.,]*)\s*BTU",
 ]
 
+TR_PATTERNS = [
+    r"[Cc]apacidade\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*TR\b",
+    r"(\d+[\.,]?\d*)\s*TR\b(?!\w)",
+    r"(\d+[\.,]?\d*)\s*[Tt]oneladas?\s*(?:de\s+)?[Rr]efrigera[çc][ãa]o",
+    r"[Tt]on(?:elada)?\s*[Rr]efrig\w*\s*[:\-–]?\s*(\d+[\.,]?\d*)",
+    r"(\d+[\.,]?\d*)\s*[Tt]ons?\s*[Rr]efrig",
+]
+
+FRIGORIFICO_W_PATTERNS = [
+    r"[Pp]ot[êe]ncia\s*frigor[íi]fica\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww]",
+    r"[Cc]apacidade\s*frigor[íi]fica\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww]",
+    r"[Cc]apacidade\s*(?:de\s+)?[Rr]efrigera[çc][ãa]o\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww]",
+    r"[Cc]ooling\s*[Cc]apacity\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww]",
+    r"[Pp]ot[êe]ncia\s*frigor[íi]fica\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Ww]\b",
+    r"[Cc]apacidade\s*frigor[íi]fica\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Ww]\b",
+]
+
 KCAL_PATTERNS = [
     r"[Pp]ot[êe]ncia\s*(?:calor[íi]fica\s*)?(?:nominal\s*)?[:\-–]?\s*(\d[\d.,]*)\s*[Kk]cal/?[Hh]?",
     r"(\d[\d.,]*)\s*[Kk]cal\s*/\s*[Hh]",
@@ -1097,11 +1137,23 @@ KCAL_PATTERNS = [
     r"[Cc]apacidade\s*(?:t[ée]rmica\s*)?[:\-–]?\s*(\d[\d.,]*)\s*[Kk]cal",
 ]
 
-GAS_CONSUMPTION_PATTERNS = [
+GAS_CONSUMPTION_KG = [
     r"[Cc]onsumo\s*(?:de\s+)?[Gg][áa]s\s*(?:\(?\s*(?:GLP|GN)\s*\)?\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Gg]\s*/\s*[Hh]",
     r"[Cc]onsumo\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Gg]\s*/\s*[Hh]",
     r"(\d+[\.,]?\d*)\s*[Kk][Gg]\s*/\s*[Hh]\s*(?:\(?\s*(?:GLP|GN)\s*\)?)?",
     r"[Vv]az[ãa]o\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Gg]\s*/\s*[Hh]",
+]
+
+GAS_CONSUMPTION_M3 = [
+    r"[Cc]onsumo\s*(?:de\s+)?[Gg][áa]s\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*m[³3]\s*/\s*[Hh]",
+    r"[Vv]az[ãa]o\s*(?:de\s+)?[Gg][áa]s\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*m[³3]\s*/\s*[Hh]",
+    r"(\d+[\.,]?\d*)\s*m[³3]\s*/\s*[Hh]\s*(?:\(?\s*(?:GLP|GN|g[áa]s)\s*\)?)?",
+]
+
+GAS_CONSUMPTION_L = [
+    r"[Cc]onsumo\s*(?:de\s+)?[Gg][áa]s\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Ll]\s*/\s*[Hh]",
+    r"[Vv]az[ãa]o\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Ll](?:itros?)?\s*/\s*[Hh]",
+    r"(\d+[\.,]?\d*)\s*[Ll]\s*/\s*[Hh]\s*(?:\(?\s*(?:GLP|GN)\s*\)?)?",
 ]
 
 PHASE_PATTERNS = [
@@ -1156,9 +1208,28 @@ def _normalize_voltage(value: str) -> Optional[str]:
 
 def _normalize_consumption(value: str) -> Optional[str]:
     match = re.search(r"(\d+[\.,]?\d*)", value)
-    if match:
-        num_str = match.group(1).replace(",", ".")
-        return f"{num_str} kWh/mês"
+    if not match:
+        return None
+    num_str = match.group(1).replace(",", ".")
+    try:
+        num = float(num_str)
+    except ValueError:
+        return None
+
+    val_lower = value.lower()
+    if any(k in val_lower for k in ("/ano", "/year", "/yr", "anual", "annual")):
+        monthly = round(num / 12, 1)
+        if 0.5 <= monthly <= 5000:
+            return f"{monthly} kWh/mês (= {num_str} kWh/ano)"
+    elif any(k in val_lower for k in ("/dia", "/day", "/24h", "diário", "diario", "daily")):
+        if "wh" in val_lower and "kwh" not in val_lower:
+            num = num / 1000
+        monthly = round(num * 30, 1)
+        if 0.5 <= monthly <= 5000:
+            return f"{monthly} kWh/mês (= {num_str}/dia)"
+    else:
+        if 0.5 <= num <= 5000:
+            return f"{num_str} kWh/mês"
     return None
 
 
@@ -1309,11 +1380,43 @@ def find_voltage(text: str) -> Optional[str]:
 
 
 def find_consumption(text: str) -> Optional[str]:
-    for pattern in CONSUMPTION_PATTERNS:
+    for pattern in CONSUMPTION_PATTERNS_MONTHLY:
         match = re.search(pattern, text)
         if match:
             value = match.group(1).replace(",", ".")
-            return f"{value} kWh/mês"
+            try:
+                num = float(value)
+                if 0.5 <= num <= 5000:
+                    return f"{value} kWh/mês"
+            except ValueError:
+                continue
+
+    for pattern in CONSUMPTION_PATTERNS_DAILY:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1).replace(",", ".")
+            try:
+                num = float(value)
+                if "wh/" in match.group(0).lower() and "kwh" not in match.group(0).lower():
+                    num = num / 1000
+                monthly = round(num * 30, 1)
+                if 0.5 <= monthly <= 5000:
+                    return f"{monthly} kWh/mês (= {value} {'Wh' if num != float(value) else 'kWh'}/dia)"
+            except ValueError:
+                continue
+
+    for pattern in CONSUMPTION_PATTERNS_YEARLY:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1).replace(",", ".")
+            try:
+                yearly = float(value)
+                monthly = round(yearly / 12, 1)
+                if 0.5 <= monthly <= 5000:
+                    return f"{monthly} kWh/mês (= {value} kWh/ano)"
+            except ValueError:
+                continue
+
     return None
 
 
@@ -1335,6 +1438,7 @@ def find_btu(text: str) -> Optional[str]:
                     return f"{num:,} BTU/h".replace(",", ".")
             except ValueError:
                 pass
+
     for pattern in KCAL_PATTERNS:
         match = re.search(pattern, text)
         if match:
@@ -1343,23 +1447,77 @@ def find_btu(text: str) -> Optional[str]:
                 kcal = float(raw)
                 if 500 <= kcal <= 500000:
                     btu = int(kcal * 3.968)
-                    return f"{btu:,} BTU/h ({raw} kcal/h)".replace(",", ".")
+                    return f"{btu:,} BTU/h (= {raw} kcal/h)".replace(",", ".")
             except ValueError:
                 pass
+
+    for pattern in TR_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            val = match.group(1).replace(",", ".")
+            try:
+                tr = float(val)
+                if 0.5 <= tr <= 100:
+                    btu = int(tr * 12000)
+                    return f"{btu:,} BTU/h (= {val} TR)".replace(",", ".")
+            except ValueError:
+                pass
+
+    for pattern in FRIGORIFICO_W_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            val = match.group(1).replace(",", ".")
+            try:
+                num = float(val)
+                if re.search(r"[Kk][Ww]", match.group(0)):
+                    watts = num * 1000
+                    unit_label = f"{val} kW"
+                else:
+                    watts = num
+                    unit_label = f"{val} W"
+                btu = int(watts / 0.29307)
+                if 3000 <= btu <= 1000000:
+                    return f"{btu:,} BTU/h (= {unit_label} frig.)".replace(",", ".")
+            except ValueError:
+                pass
+
     return None
 
 
 def find_gas_consumption(text: str) -> Optional[str]:
-    for pattern in GAS_CONSUMPTION_PATTERNS:
+    for pattern in GAS_CONSUMPTION_KG:
         match = re.search(pattern, text)
         if match:
             value = match.group(1).replace(",", ".")
             try:
                 num = float(value)
-                if 0.1 <= num <= 50:
+                if 0.05 <= num <= 100:
                     return f"{value} kg/h"
             except ValueError:
                 pass
+
+    for pattern in GAS_CONSUMPTION_M3:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1).replace(",", ".")
+            try:
+                num = float(value)
+                if 0.01 <= num <= 200:
+                    return f"{value} m³/h"
+            except ValueError:
+                pass
+
+    for pattern in GAS_CONSUMPTION_L:
+        match = re.search(pattern, text)
+        if match:
+            value = match.group(1).replace(",", ".")
+            try:
+                num = float(value)
+                if 0.1 <= num <= 500:
+                    return f"{value} L/h"
+            except ValueError:
+                pass
+
     return None
 
 
