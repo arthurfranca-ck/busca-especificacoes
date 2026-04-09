@@ -470,6 +470,8 @@ with tab_single:
         search_clicked = st.button("Buscar", type="primary", use_container_width=True)
 
     if search_clicked and product_name.strip():
+        st.session_state.pop("ai_analysis", None)
+        st.session_state.pop("ai_comparison", None)
         start = time.time()
         pname = product_name.strip()
 
@@ -542,10 +544,12 @@ with tab_single:
         if HAS_GEMINI:
             if st.button("Analisar com IA", key="analyze_single", type="secondary"):
                 with st.spinner("Gerando analise com IA..."):
-                    analysis = analyze_single(result)
+                    st.session_state["ai_analysis"] = analyze_single(result)
+
+            if st.session_state.get("ai_analysis"):
                 st.markdown("---")
                 st.markdown("### Analise do Equipamento")
-                st.markdown(analysis)
+                st.markdown(st.session_state["ai_analysis"])
 
     elif search_clicked:
         st.warning("Digite o nome de um equipamento para buscar.")
@@ -570,10 +574,12 @@ with tab_single:
 
         if st.button("Analisar com IA", key="analyze_single_persist", type="secondary"):
             with st.spinner("Gerando analise com IA..."):
-                analysis = analyze_single(result)
+                st.session_state["ai_analysis"] = analyze_single(result)
+
+        if st.session_state.get("ai_analysis"):
             st.markdown("---")
             st.markdown("### Analise do Equipamento")
-            st.markdown(analysis)
+            st.markdown(st.session_state["ai_analysis"])
 
 
 # ─── Tab 2: Busca em Lote ────────────────────────────────────────────────────
@@ -673,10 +679,12 @@ with tab_batch:
             if HAS_GEMINI and len(results) >= 2:
                 if st.button("Comparar com IA", key="compare_batch", type="secondary"):
                     with st.spinner("Gerando comparacao com IA..."):
-                        comparison = compare_multiple(results)
-                    st.markdown("---")
-                    st.markdown("### Comparacao de Equipamentos")
-                    st.markdown(comparison)
+                        st.session_state["ai_comparison"] = compare_multiple(results)
+
+            if st.session_state.get("ai_comparison"):
+                st.markdown("---")
+                st.markdown("### Comparacao de Equipamentos")
+                st.markdown(st.session_state["ai_comparison"])
 
     if st.session_state.last_batch_results and HAS_GEMINI and not batch_products:
         results = st.session_state.last_batch_results
@@ -684,10 +692,12 @@ with tab_batch:
             st.markdown(f"**Ultima busca em lote:** {len(results)} equipamento(s)")
             if st.button("Comparar com IA", key="compare_persist", type="secondary"):
                 with st.spinner("Gerando comparacao com IA..."):
-                    comparison = compare_multiple(results)
+                    st.session_state["ai_comparison"] = compare_multiple(results)
+
+            if st.session_state.get("ai_comparison"):
                 st.markdown("---")
                 st.markdown("### Comparacao de Equipamentos")
-                st.markdown(comparison)
+                st.markdown(st.session_state["ai_comparison"])
 
 
 # ─── Tab 3: Historico ────────────────────────────────────────────────────────
