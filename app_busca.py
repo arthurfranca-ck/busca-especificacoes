@@ -15,6 +15,9 @@ import os
 import json
 from datetime import datetime
 
+import base64
+import requests as req
+
 from freezer_specs_scraper import search_product
 
 try:
@@ -23,14 +26,97 @@ try:
 except ImportError:
     pass
 
-# ─── AI Setup (Groq / Llama) ─────────────────────────────────────────────────
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-if not GROQ_API_KEY:
+def _get_secret(key: str) -> str:
+    val = os.environ.get(key, "")
+    if not val:
+        try:
+            val = st.secrets.get(key, "")
+        except Exception:
+            pass
+    return val or ""
+
+
+# ─── Historico persistente (GitHub) ───────────────────────────────────────────
+
+GITHUB_TOKEN = _get_secret("GITHUB_TOKEN")
+GITHUB_REPO = _get_secret("GITHUB_REPO") or "arthurfranca-ck/busca-especificacoes"
+HISTORY_FILE = "historico.csv"
+HISTORY_COLUMNS = [
+    "produto", "potencia_w", "voltagem_v", "fase", "consumo_kwh", "btu",
+    "fonte_potencia", "fonte_voltagem", "data_hora", "usuario",
+]
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_history_from_github() -> pd.DataFrame:
+    """Le o historico.csv do repositório GitHub."""
+    if not GITHUB_TOKEN:
+        return pd.DataFrame(columns=HISTORY_COLUMNS)
     try:
-        GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+        resp = req.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORY_FILE}",
+            headers={"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            content = base64.b64decode(resp.json()["content"]).decode("utf-8-sig")
+            df = pd.read_csv(io.StringIO(content))
+            return df
+        return pd.DataFrame(columns=HISTORY_COLUMNS)
+    except Exception:
+        return pd.DataFrame(columns=HISTORY_COLUMNS)
+
+
+def _save_history_to_github(df: pd.DataFrame):
+    """Salva o historico.csv no repositório GitHub."""
+    if not GITHUB_TOKEN:
+        return
+    try:
+        csv_content = df.to_csv(index=False, encoding="utf-8-sig")
+        encoded = base64.b64encode(csv_content.encode("utf-8-sig")).decode()
+
+        resp = req.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORY_FILE}",
+            headers={"Authorization": f"token {GITHUB_TOKEN}"},
+            timeout=10,
+        )
+        sha = resp.json().get("sha") if resp.status_code == 200 else None
+
+        payload = {
+            "message": f"Historico atualizado - {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+            "content": encoded,
+            "branch": "main",
+        }
+        if sha:
+            payload["sha"] = sha
+
+        req.put(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contents/{HISTORY_FILE}",
+            headers={"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"},
+            json=payload,
+            timeout=15,
+        )
+        _load_history_from_github.clear()
     except Exception:
         pass
+
+
+def append_to_persistent_history(result: dict):
+    """Adiciona um resultado ao historico persistente no GitHub."""
+    if not GITHUB_TOKEN:
+        return
+    row = {col: result.get(col, "") for col in HISTORY_COLUMNS}
+    row["data_hora"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+    df = _load_history_from_github()
+    new_row = pd.DataFrame([row])
+    df = pd.concat([new_row, df], ignore_index=True)
+    _save_history_to_github(df)
+
+
+# ─── AI Setup (Groq / Llama) ─────────────────────────────────────────────────
+
+GROQ_API_KEY = _get_secret("GROQ_API_KEY")
 HAS_GEMINI = False
 groq_client = None
 
@@ -305,11 +391,13 @@ with tab_single:
                     result = enrich_with_ai(result)
 
         st.session_state.last_single_result = result
-        st.session_state.history.insert(0, {
+        history_entry = {
             **result,
             "data_hora": datetime.now().strftime("%d/%m/%Y %H:%M"),
             "tempo_busca": f"{elapsed:.0f}s",
-        })
+        }
+        st.session_state.history.insert(0, history_entry)
+        append_to_persistent_history(history_entry)
 
         st.success(f"Busca concluida em {elapsed:.0f} segundos")
 
@@ -413,6 +501,7 @@ with tab_batch:
                 result["data_hora"] = datetime.now().strftime("%d/%m/%Y %H:%M")
                 results.append(result)
                 st.session_state.history.insert(0, result)
+                append_to_persistent_history(result)
 
             progress.progress(1.0, text="Concluido!")
             status_container.success(f"Busca concluida! {len(results)} equipamento(s) processado(s).")
@@ -466,42 +555,55 @@ with tab_batch:
 # ─── Tab 3: Historico ────────────────────────────────────────────────────────
 
 with tab_history:
-    if st.session_state.history:
-        col_clear, col_count = st.columns([1, 4])
-        with col_clear:
-            if st.button("Limpar historico"):
-                st.session_state.history = []
-                st.rerun()
-        with col_count:
-            st.markdown(f"**{len(st.session_state.history)}** busca(s) realizada(s)")
+    display_cols = {
+        "produto": "Equipamento",
+        "potencia_w": "Potencia (W)",
+        "voltagem_v": "Voltagem (V)",
+        "fase": "Fase",
+        "consumo_kwh": "Consumo (kWh)",
+        "btu": "BTU",
+        "fonte_potencia": "Fonte Potencia",
+        "fonte_voltagem": "Fonte Voltagem",
+        "data_hora": "Data/Hora",
+    }
 
-        df_hist = pd.DataFrame(st.session_state.history)
-        display_cols = {
-            "produto": "Equipamento",
-            "potencia_w": "Potencia (W)",
-            "voltagem_v": "Voltagem (V)",
-            "fase": "Fase",
-            "consumo_kwh": "Consumo (kWh)",
-            "btu": "BTU",
-            "fonte_potencia": "Fonte Potencia",
-            "fonte_voltagem": "Fonte Voltagem",
-            "data_hora": "Data/Hora",
-            "tempo_busca": "Tempo",
-        }
-        available = [c for c in display_cols if c in df_hist.columns]
-        df_display = df_hist[available].rename(columns=display_cols)
-        st.dataframe(df_display, use_container_width=True)
+    hist_tab_session, hist_tab_global = st.tabs(["Sessao atual", "Historico completo"])
 
-        csv_buf = io.StringIO()
-        df_display.to_csv(csv_buf, index=False, encoding="utf-8-sig")
-        st.download_button(
-            "Baixar historico (CSV)",
-            csv_buf.getvalue(),
-            file_name=f"historico_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-            mime="text/csv",
-        )
-    else:
-        st.info("Nenhuma busca realizada ainda. Use a aba 'Busca Individual' ou 'Busca em Lote'.")
+    with hist_tab_session:
+        if st.session_state.history:
+            st.markdown(f"**{len(st.session_state.history)}** busca(s) nesta sessao")
+            df_hist = pd.DataFrame(st.session_state.history)
+            available = [c for c in display_cols if c in df_hist.columns]
+            df_display = df_hist[available].rename(columns=display_cols)
+            st.dataframe(df_display, use_container_width=True)
+        else:
+            st.info("Nenhuma busca nesta sessao.")
+
+    with hist_tab_global:
+        if GITHUB_TOKEN:
+            if st.button("Atualizar historico", type="secondary"):
+                _load_history_from_github.clear()
+
+            df_global = _load_history_from_github()
+            if not df_global.empty:
+                st.markdown(f"**{len(df_global)}** busca(s) registrada(s) no total")
+                available = [c for c in display_cols if c in df_global.columns]
+                df_gdisp = df_global[available].rename(columns=display_cols)
+                st.dataframe(df_gdisp, use_container_width=True)
+
+                csv_buf = io.StringIO()
+                df_gdisp.to_csv(csv_buf, index=False, encoding="utf-8-sig")
+                st.download_button(
+                    "Baixar historico completo (CSV)",
+                    csv_buf.getvalue(),
+                    file_name=f"historico_completo_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.info("Nenhuma busca registrada ainda.")
+        else:
+            st.warning("Historico persistente nao configurado. Adicione GITHUB_TOKEN nos Secrets.")
+            st.caption("Veja o GUIA_MANUTENCAO.md para instruções.")
 
 
 # ─── Tab 4: Assistente IA ────────────────────────────────────────────────────
