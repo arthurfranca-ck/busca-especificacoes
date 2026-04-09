@@ -650,54 +650,45 @@ with tab_batch:
             status_container.success(f"Busca concluida! {len(results)} equipamento(s) processado(s).")
 
             st.session_state.last_batch_results = results
+            st.session_state.pop("ai_comparison", None)
 
-            df = pd.DataFrame(results)
-            display_cols = {
-                "produto": "Equipamento",
-                "potencia_w": "Potencia",
-                "voltagem_v": "Voltagem",
-                "fase": "Fase",
-                "consumo_kwh": "Consumo (kWh)",
-                "consumo_gas": "Consumo Gas",
-                "btu": "BTU/kcal",
-                "fonte_potencia": "Fonte Potencia",
-                "fonte_voltagem": "Fonte Voltagem",
-                "tempo_busca": "Tempo",
-            }
-            df_display = df[[c for c in display_cols if c in df.columns]].rename(columns=display_cols)
-            st.dataframe(df_display, use_container_width=True)
-
-            csv_buf = io.StringIO()
-            df_display.to_csv(csv_buf, index=False, encoding="utf-8-sig")
-            st.download_button(
-                "Baixar CSV",
-                csv_buf.getvalue(),
-                file_name=f"especificacoes_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-            )
-
-            if HAS_GEMINI and len(results) >= 2:
-                if st.button("Comparar com IA", key="compare_batch", type="secondary"):
-                    with st.spinner("Gerando comparacao com IA..."):
-                        st.session_state["ai_comparison"] = compare_multiple(results)
-
-            if st.session_state.get("ai_comparison"):
-                st.markdown("---")
-                st.markdown("### Comparacao de Equipamentos")
-                st.markdown(st.session_state["ai_comparison"])
-
-    if st.session_state.last_batch_results and HAS_GEMINI and not batch_products:
+    if st.session_state.last_batch_results:
         results = st.session_state.last_batch_results
-        if len(results) >= 2:
-            st.markdown(f"**Ultima busca em lote:** {len(results)} equipamento(s)")
-            if st.button("Comparar com IA", key="compare_persist", type="secondary"):
+
+        df = pd.DataFrame(results)
+        display_cols = {
+            "produto": "Equipamento",
+            "potencia_w": "Potencia",
+            "voltagem_v": "Voltagem",
+            "fase": "Fase",
+            "consumo_kwh": "Consumo (kWh)",
+            "consumo_gas": "Consumo Gas",
+            "btu": "BTU/kcal",
+            "fonte_potencia": "Fonte Potencia",
+            "fonte_voltagem": "Fonte Voltagem",
+            "tempo_busca": "Tempo",
+        }
+        df_display = df[[c for c in display_cols if c in df.columns]].rename(columns=display_cols)
+        st.dataframe(df_display, use_container_width=True)
+
+        csv_buf = io.StringIO()
+        df_display.to_csv(csv_buf, index=False, encoding="utf-8-sig")
+        st.download_button(
+            "Baixar CSV",
+            csv_buf.getvalue(),
+            file_name=f"especificacoes_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv",
+        )
+
+        if HAS_GEMINI and len(results) >= 2:
+            if st.button("Comparar com IA", key="compare_batch", type="secondary"):
                 with st.spinner("Gerando comparacao com IA..."):
                     st.session_state["ai_comparison"] = compare_multiple(results)
 
-            if st.session_state.get("ai_comparison"):
-                st.markdown("---")
-                st.markdown("### Comparacao de Equipamentos")
-                st.markdown(st.session_state["ai_comparison"])
+        if st.session_state.get("ai_comparison"):
+            st.markdown("---")
+            st.markdown("### Comparacao de Equipamentos")
+            st.markdown(st.session_state["ai_comparison"])
 
 
 # ─── Tab 3: Historico ────────────────────────────────────────────────────────
