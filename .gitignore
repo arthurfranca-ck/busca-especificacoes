@@ -1,0 +1,30 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+*.pdf
+*.xlsx
+*.xls
+*.log
+.cursor/
+terminals/
+agent-transcripts/
+credentials.json
+venv/
+.venv/
+node_modules/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Other project files not needed for the app
+views_bigquery.sql
+README_slack.md
+slack_bot.py
+sheets_bot.py
+slack_app_manifest.yml
+requirements_slack.txt
+requirements_sheets.txt
+README_sheets.md
