@@ -114,6 +114,18 @@ def append_to_persistent_history(result: dict):
     _save_history_to_github(df)
 
 
+# ─── Tavily (busca com fontes reais) ──────────────────────────────────────────
+
+TAVILY_API_KEY = _get_secret("TAVILY_API_KEY")
+tavily_client = None
+
+if TAVILY_API_KEY:
+    try:
+        from tavily import TavilyClient
+        tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
+    except Exception:
+        pass
+
 # ─── AI Setup (Groq / Llama) ─────────────────────────────────────────────────
 
 GROQ_API_KEY = _get_secret("GROQ_API_KEY")
@@ -164,8 +176,63 @@ def ask_gemini(prompt: str, context: str = "") -> str:
         return f"Erro ao consultar IA: {e}"
 
 
+def _tavily_search(produto: str, missing: list[str]) -> tuple[str, dict[str, str]]:
+    """Busca specs faltantes via Tavily. Retorna (conteudo, {campo: url_fonte})."""
+    if not tavily_client:
+        return "", {}
+    try:
+        query = f"{produto} especificações técnicas {' '.join(missing)}"
+        response = tavily_client.search(
+            query=query,
+            search_depth="advanced",
+            max_results=5,
+            include_answer=True,
+        )
+        content_parts = []
+        sources = {}
+        for r in response.get("results", []):
+            url = r.get("url", "")
+            text = r.get("content", "")
+            if text:
+                content_parts.append(f"[Fonte: {url}]\n{text}")
+                if url:
+                    for field in missing:
+                        if field.lower() not in sources:
+                            sources[field.lower()] = url
+
+        answer = response.get("answer", "")
+        if answer:
+            content_parts.insert(0, f"Resumo: {answer}")
+
+        top_url = ""
+        if response.get("results"):
+            top_url = response["results"][0].get("url", "")
+        for field in missing:
+            if field.lower() not in sources:
+                sources[field.lower()] = top_url
+
+        return "\n\n".join(content_parts), sources
+    except Exception:
+        return "", {}
+
+
+def _map_field_source(field_label: str, sources: dict) -> str:
+    """Mapeia um label de campo para a URL fonte do Tavily."""
+    mappings = {
+        "potencia_w": ["potencia (w)", "potencia"],
+        "voltagem_v": ["voltagem (v)", "voltagem"],
+        "fase": ["fase (monofasico/bifasico/trifasico)", "fase"],
+        "consumo_kwh": ["consumo (kwh)", "consumo"],
+        "btu": ["btu"],
+    }
+    for key in mappings.get(field_label, []):
+        if key in sources:
+            return sources[key]
+    return ""
+
+
 def enrich_with_ai(result: dict) -> dict:
-    """Quando o scraper nao encontra specs, pede para a IA estimar."""
+    """Quando o scraper nao encontra specs, busca via Tavily + Groq."""
     missing = []
     if not result.get("potencia_w"):
         missing.append("Potencia (W)")
@@ -182,14 +249,31 @@ def enrich_with_ai(result: dict) -> dict:
         return result
 
     produto = result.get("produto", "")
-    prompt = (
-        f"Para o equipamento '{produto}', nao consegui encontrar: {', '.join(missing)}. "
-        f"Com base no modelo e marca, estime os valores mais provaveis. "
-        f"Responda APENAS em formato JSON com as chaves: "
-        f"potencia_w, voltagem_v, fase, consumo_kwh, btu. "
-        f"Se nao souber, coloque null. Exemplo: "
-        f'{{"potencia_w": "150 W", "voltagem_v": "220 V", "fase": "Monofasico", "consumo_kwh": "45 kWh/mes", "btu": null}}'
-    )
+
+    tavily_content, tavily_sources = _tavily_search(produto, missing)
+
+    if tavily_content and HAS_GEMINI:
+        prompt = (
+            f"Analise os dados abaixo sobre o equipamento '{produto}' e extraia: {', '.join(missing)}.\n"
+            f"Dados encontrados na internet:\n{tavily_content[:3000]}\n\n"
+            f"Responda APENAS em formato JSON com as chaves: "
+            f"potencia_w, voltagem_v, fase, consumo_kwh, btu. "
+            f"Se nao encontrar nos dados, coloque null. Exemplo: "
+            f'{{"potencia_w": "150 W", "voltagem_v": "220 V", "fase": "Monofasico", "consumo_kwh": "45 kWh/mes", "btu": null}}'
+        )
+        source_label = "IA + Fonte web"
+    elif HAS_GEMINI:
+        prompt = (
+            f"Para o equipamento '{produto}', nao consegui encontrar: {', '.join(missing)}. "
+            f"Com base no modelo e marca, estime os valores mais provaveis. "
+            f"Responda APENAS em formato JSON com as chaves: "
+            f"potencia_w, voltagem_v, fase, consumo_kwh, btu. "
+            f"Se nao souber, coloque null. Exemplo: "
+            f'{{"potencia_w": "150 W", "voltagem_v": "220 V", "fase": "Monofasico", "consumo_kwh": "45 kWh/mes", "btu": null}}'
+        )
+        source_label = "Estimativa IA"
+    else:
+        return result
 
     response = ask_gemini(prompt)
     try:
@@ -198,21 +282,22 @@ def enrich_with_ai(result: dict) -> dict:
         if start >= 0 and end_idx > start:
             ai_data = json.loads(response[start:end_idx])
             enriched = result.copy()
-            if not enriched.get("potencia_w") and ai_data.get("potencia_w"):
-                enriched["potencia_w"] = f"{ai_data['potencia_w']} (estimativa IA)"
-                enriched["fonte_potencia"] = "Estimativa Google Gemini"
-            if not enriched.get("voltagem_v") and ai_data.get("voltagem_v"):
-                enriched["voltagem_v"] = f"{ai_data['voltagem_v']} (estimativa IA)"
-                enriched["fonte_voltagem"] = "Estimativa Google Gemini"
-            if not enriched.get("consumo_kwh") and ai_data.get("consumo_kwh"):
-                enriched["consumo_kwh"] = f"{ai_data['consumo_kwh']} (estimativa IA)"
-                enriched["fonte_consumo"] = "Estimativa Google Gemini"
-            if not enriched.get("btu") and ai_data.get("btu"):
-                enriched["btu"] = f"{ai_data['btu']} (estimativa IA)"
-                enriched["fonte_btu"] = "Estimativa Google Gemini"
-            if not enriched.get("fase") and ai_data.get("fase"):
-                enriched["fase"] = f"{ai_data['fase']} (estimativa IA)"
-                enriched["fonte_fase"] = "Estimativa Google Gemini"
+            fields = [
+                ("potencia_w", "fonte_potencia"),
+                ("voltagem_v", "fonte_voltagem"),
+                ("fase", "fonte_fase"),
+                ("consumo_kwh", "fonte_consumo"),
+                ("btu", "fonte_btu"),
+            ]
+            for field, fonte_field in fields:
+                if not enriched.get(field) and ai_data.get(field):
+                    tavily_url = _map_field_source(field, tavily_sources)
+                    if tavily_url:
+                        enriched[field] = str(ai_data[field])
+                        enriched[fonte_field] = tavily_url
+                    else:
+                        enriched[field] = f"{ai_data[field]} (estimativa IA)"
+                        enriched[fonte_field] = "Estimativa IA"
             return enriched
     except (json.JSONDecodeError, KeyError, TypeError):
         pass
@@ -727,4 +812,9 @@ with st.sidebar:
     else:
         st.warning("IA desativada")
         st.caption("Adicione GROQ_API_KEY no .env")
-    st.caption("Busca de Especificacoes v2.0")
+    if tavily_client:
+        st.success("Tavily ativo (fontes reais)")
+    else:
+        st.info("Tavily desativado")
+        st.caption("Adicione TAVILY_API_KEY nos Secrets")
+    st.caption("Busca de Especificacoes v2.1")

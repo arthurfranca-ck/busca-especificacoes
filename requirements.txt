@@ -7,3 +7,4 @@ streamlit
 pandas
 python-dotenv
 groq
+tavily-python
