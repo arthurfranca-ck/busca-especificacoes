@@ -348,12 +348,21 @@ tab_ai = tab_objects[3] if HAS_GEMINI else None
 
 # ─── Helper: render spec with AI tag ─────────────────────────────────────────
 
-def render_metric(label, value, fonte=None):
+def _google_verify_url(product: str, spec_label: str, spec_value: str) -> str:
+    from urllib.parse import quote_plus as qp
+    query = f"{product} {spec_label} {spec_value} especificações técnicas"
+    return f"https://www.google.com/search?q={qp(query)}"
+
+
+def render_metric(label, value, fonte=None, product_name=None):
     """Renderiza metrica com badge se for estimativa IA."""
     if value and "(estimativa IA)" in str(value):
         clean_val = str(value).replace(" (estimativa IA)", "")
         st.metric(label, clean_val)
         st.markdown('<span class="ai-badge">Estimativa IA</span>', unsafe_allow_html=True)
+        if product_name:
+            url = _google_verify_url(product_name, label, clean_val)
+            st.caption(f"[Verificar no Google]({url})")
     else:
         st.metric(label, value or "Nao encontrada")
     if fonte and fonte != "Estimativa Google Gemini":
@@ -401,17 +410,18 @@ with tab_single:
 
         st.success(f"Busca concluida em {elapsed:.0f} segundos")
 
+        _pname = result.get("produto", "")
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            render_metric("Potencia (W)", result.get("potencia_w"), result.get("fonte_potencia"))
+            render_metric("Potencia (W)", result.get("potencia_w"), result.get("fonte_potencia"), _pname)
         with col2:
-            render_metric("Voltagem (V)", result.get("voltagem_v"), result.get("fonte_voltagem"))
+            render_metric("Voltagem (V)", result.get("voltagem_v"), result.get("fonte_voltagem"), _pname)
         with col3:
-            render_metric("Fase", result.get("fase"), result.get("fonte_fase"))
+            render_metric("Fase", result.get("fase"), result.get("fonte_fase"), _pname)
         with col4:
-            render_metric("Consumo (kWh)", result.get("consumo_kwh"), result.get("fonte_consumo"))
+            render_metric("Consumo (kWh)", result.get("consumo_kwh"), result.get("fonte_consumo"), _pname)
         with col5:
-            render_metric("BTU", result.get("btu"), result.get("fonte_btu"))
+            render_metric("BTU", result.get("btu"), result.get("fonte_btu"), _pname)
 
         if HAS_GEMINI:
             if st.button("Analisar com IA", key="analyze_single", type="secondary"):
@@ -426,17 +436,18 @@ with tab_single:
 
     if not search_clicked and st.session_state.last_single_result and HAS_GEMINI:
         result = st.session_state.last_single_result
+        _pname = result.get("produto", "")
         col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            render_metric("Potencia (W)", result.get("potencia_w"), result.get("fonte_potencia"))
+            render_metric("Potencia (W)", result.get("potencia_w"), result.get("fonte_potencia"), _pname)
         with col2:
-            render_metric("Voltagem (V)", result.get("voltagem_v"), result.get("fonte_voltagem"))
+            render_metric("Voltagem (V)", result.get("voltagem_v"), result.get("fonte_voltagem"), _pname)
         with col3:
-            render_metric("Fase", result.get("fase"), result.get("fonte_fase"))
+            render_metric("Fase", result.get("fase"), result.get("fonte_fase"), _pname)
         with col4:
-            render_metric("Consumo (kWh)", result.get("consumo_kwh"), result.get("fonte_consumo"))
+            render_metric("Consumo (kWh)", result.get("consumo_kwh"), result.get("fonte_consumo"), _pname)
         with col5:
-            render_metric("BTU", result.get("btu"), result.get("fonte_btu"))
+            render_metric("BTU", result.get("btu"), result.get("fonte_btu"), _pname)
 
         if st.button("Analisar com IA", key="analyze_single_persist", type="secondary"):
             with st.spinner("Gerando analise com IA..."):
