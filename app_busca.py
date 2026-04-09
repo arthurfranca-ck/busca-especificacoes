@@ -470,19 +470,47 @@ with tab_single:
         search_clicked = st.button("Buscar", type="primary", use_container_width=True)
 
     if search_clicked and product_name.strip():
-        with st.spinner(f"Buscando especificacoes de **{product_name}**... (pode levar 1-2 minutos)"):
-            start = time.time()
-            result = cached_search(product_name.strip())
+        start = time.time()
+        pname = product_name.strip()
+
+        ai_result = None
+        if tavily_client and HAS_GEMINI:
+            with st.spinner(f"Buscando **{pname}** com IA (rapido)..."):
+                ai_result = enrich_with_ai({"produto": pname})
+                ai_elapsed = time.time() - start
+
+            if ai_result and any([
+                ai_result.get("potencia_w"), ai_result.get("voltagem_v"),
+                ai_result.get("consumo_kwh"), ai_result.get("btu"),
+                ai_result.get("fase"), ai_result.get("consumo_gas"),
+            ]):
+                st.success(f"IA encontrou dados em {ai_elapsed:.0f}s — confirmando com scraper...")
+
+        with st.spinner(f"Confirmando em sites de varejo/fabricantes... (pode levar 1-2 min)"):
+            result = cached_search(pname)
             elapsed = time.time() - start
 
-        if HAS_GEMINI:
-            has_missing = not all([
-                result.get("potencia_w"), result.get("voltagem_v"),
-                result.get("consumo_kwh"),
-            ])
-            if has_missing:
-                with st.spinner("Consultando IA para complementar dados..."):
-                    result = enrich_with_ai(result)
+        if ai_result:
+            for key in ["potencia_w", "voltagem_v", "fase", "consumo_kwh", "btu", "consumo_gas"]:
+                fonte_key = f"fonte_{key.replace('_w','').replace('_v','').replace('_kwh','')}"
+                if key == "potencia_w":
+                    fonte_key = "fonte_potencia"
+                elif key == "voltagem_v":
+                    fonte_key = "fonte_voltagem"
+                elif key == "consumo_kwh":
+                    fonte_key = "fonte_consumo"
+                elif key == "consumo_gas":
+                    fonte_key = "fonte_consumo_gas"
+                elif key == "btu":
+                    fonte_key = "fonte_btu"
+                elif key == "fase":
+                    fonte_key = "fonte_fase"
+
+                if result.get(key):
+                    pass
+                elif ai_result.get(key):
+                    result[key] = ai_result[key]
+                    result[fonte_key] = ai_result.get(fonte_key, "")
 
         st.session_state.last_single_result = result
         history_entry = {
@@ -589,15 +617,22 @@ with tab_batch:
                 status_container.info(f"Buscando: **{prod}**... (pode levar 1-2 min)")
 
                 start = time.time()
+
+                ai_res = None
+                if tavily_client and HAS_GEMINI:
+                    ai_res = enrich_with_ai({"produto": prod})
+
                 result = cached_search(prod)
                 elapsed = time.time() - start
 
-                if HAS_GEMINI:
-                    has_missing = not all([
-                        result.get("potencia_w"), result.get("voltagem_v"),
-                    ])
-                    if has_missing:
-                        result = enrich_with_ai(result)
+                if ai_res:
+                    for key in ["potencia_w", "voltagem_v", "fase", "consumo_kwh", "btu", "consumo_gas"]:
+                        fk = {"potencia_w": "fonte_potencia", "voltagem_v": "fonte_voltagem",
+                              "consumo_kwh": "fonte_consumo", "consumo_gas": "fonte_consumo_gas",
+                              "btu": "fonte_btu", "fase": "fonte_fase"}.get(key, "")
+                        if not result.get(key) and ai_res.get(key):
+                            result[key] = ai_res[key]
+                            result[fk] = ai_res.get(fk, "")
 
                 result["tempo_busca"] = f"{elapsed:.0f}s"
                 result["data_hora"] = datetime.now().strftime("%d/%m/%Y %H:%M")
