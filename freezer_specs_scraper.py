@@ -984,7 +984,9 @@ def _match_label_value(label: str, value: str, result: dict):
     if not value or len(value) > 100:
         return
 
-    if any(k in label for k in ("potência", "potencia", "power", "wattage", "watts")):
+    if any(k in label for k in ("potência", "potencia", "power", "wattage", "watts",
+                                  "kw", "hp", "cv", "va", "kva", "capacidade elétrica",
+                                  "capacidade eletrica", "potência elétrica")):
         parsed = _normalize_power(value)
         if parsed and not result["potencia"]:
             result["potencia"] = parsed
@@ -1021,7 +1023,7 @@ def _match_label_value(label: str, value: str, result: dict):
 # Extração — Regex em texto livre
 # ---------------------------------------------------------------------------
 
-POWER_PATTERNS = [
+POWER_PATTERNS_W = [
     r"[Pp]ot[êe]ncia\s*(?:nominal\s*)?(?:\([Ww]\)\s*)?[:\-–\s]*(\d+[\.,]?\d*)\s*[Ww](?:atts?)?",
     r"[Pp]ot[êe]ncia\s+(\d+[\.,]?\d*)\s*[Ww]",
     r"[Pp]ower\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Ww]",
@@ -1031,10 +1033,34 @@ POWER_PATTERNS = [
     r"\b(\d{2,4})\s*[Ww]atts?\b",
 ]
 
+POWER_PATTERNS_KW = [
+    r"[Pp]ot[êe]ncia\s*(?:nominal\s*)?(?:\([Kk][Ww]\)\s*)?[:\-–\s]*(\d+[\.,]?\d*)\s*[Kk][Ww]\b",
+    r"[Pp]ower\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww]\b",
+    r"[Cc]onsumo\s*[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk][Ww]\b",
+    r"\b(\d+[\.,]?\d*)\s*[Kk][Ww]\b(?!\s*/\s*[Hh])",
+]
+
 HP_PATTERNS = [
     r"[Pp]ot[êe]ncia\s*(?:do\s+)?(?:compressor\s*)?[:\-–]?\s*(\d+/\d+|\d+[\.,]?\d*)\s*[Hh][Pp]",
     r"(\d+/\d+|\d+[\.,]?\d*)\s*[Hh][Pp]\b",
     r"[Mm]otor\s*(?:de\s+)?(\d+/\d+|\d+[\.,]?\d*)\s*[Hh][Pp]",
+]
+
+CV_PATTERNS = [
+    r"[Pp]ot[êe]ncia\s*(?:do\s+)?(?:compressor\s*)?[:\-–]?\s*(\d+/\d+|\d+[\.,]?\d*)\s*[Cc][Vv]\b",
+    r"(\d+/\d+|\d+[\.,]?\d*)\s*[Cc][Vv]\b",
+    r"[Mm]otor\s*(?:de\s+)?(\d+/\d+|\d+[\.,]?\d*)\s*[Cc][Vv]\b",
+]
+
+VA_PATTERNS = [
+    r"[Pp]ot[êe]ncia\s*(?:aparente\s*)?[:\-–]?\s*(\d+[\.,]?\d*)\s*[Kk]?[Vv][Aa]\b",
+    r"(\d+[\.,]?\d*)\s*[Kk][Vv][Aa]\b",
+    r"(\d+[\.,]?\d*)\s*[Vv][Aa]\b",
+]
+
+BTU_AS_POWER_PATTERNS = [
+    r"[Pp]ot[êe]ncia\s*(?:de\s+)?(?:refrigera[çc][ãa]o\s*)?[:\-–]?\s*(\d[\d.,]*)\s*BTU",
+    r"[Cc]apacidade\s*(?:de\s+)?(?:refrigera[çc][ãa]o\s*)?[:\-–]?\s*(\d[\d.,]*)\s*BTU",
 ]
 
 VOLTAGE_PATTERNS = [
@@ -1090,16 +1116,27 @@ PHASE_PATTERNS = [
 
 
 def _normalize_power(value: str) -> Optional[str]:
-    match = re.search(r"(\d+[\.,]?\d*)", value)
-    if match:
-        num_str = match.group(1).replace(",", ".")
-        try:
-            num = float(num_str)
-            if 30 <= num <= 10000:
-                return f"{num_str} W"
-        except ValueError:
-            pass
-    return None
+    value_lower = value.lower().strip()
+    match = re.search(r"(\d+[/.,]?\d*)", value)
+    if not match:
+        return None
+    num_str = match.group(1)
+
+    if "kva" in value_lower:
+        return _convert_to_watts(num_str, "kVA")
+    if "va" in value_lower:
+        return _convert_to_watts(num_str, "VA")
+    if "kw" in value_lower:
+        return _convert_to_watts(num_str, "kW")
+    if "hp" in value_lower:
+        return _convert_to_watts(num_str, "HP")
+    if "cv" in value_lower:
+        return _convert_to_watts(num_str, "CV")
+    if "kcal" in value_lower:
+        return _convert_to_watts(num_str, "KCAL")
+    if "btu" in value_lower:
+        return _convert_to_watts(num_str, "BTU")
+    return _convert_to_watts(num_str, "W")
 
 
 def _normalize_voltage(value: str) -> Optional[str]:
@@ -1125,51 +1162,130 @@ def _normalize_consumption(value: str) -> Optional[str]:
     return None
 
 
-def _hp_to_watts(hp_str: str) -> Optional[str]:
-    """Converte HP para Watts."""
-    hp_str = hp_str.strip()
-    if hp_str in HP_TO_WATTS:
-        watts = HP_TO_WATTS[hp_str]
-        return f"{watts} W (≈ {hp_str} HP)"
+def _frac_or_float(s: str) -> Optional[float]:
+    """Converte '1/3', '1.5' ou '1,5' em float."""
+    s = s.strip()
+    if "/" in s:
+        parts = s.split("/")
+        try:
+            return float(parts[0]) / float(parts[1])
+        except (ValueError, ZeroDivisionError):
+            return None
     try:
-        hp_val = float(hp_str.replace(",", "."))
-        watts = int(hp_val * 746)
-        if 50 <= watts <= 10000:
-            return f"{watts} W (≈ {hp_str} HP)"
+        return float(s.replace(",", "."))
     except ValueError:
-        pass
+        return None
+
+
+def _convert_to_watts(value_str: str, unit: str) -> Optional[str]:
+    """Converte qualquer unidade de potência para Watts com nota da unidade original."""
+    num = _frac_or_float(value_str)
+    if num is None or num <= 0:
+        return None
+
+    unit_upper = unit.upper()
+    if unit_upper == "W":
+        if 30 <= num <= 50000:
+            return f"{value_str} W"
+        return None
+    elif unit_upper == "KW":
+        watts = int(num * 1000)
+        if 30 <= watts <= 50000:
+            return f"{watts} W (= {value_str} kW)"
+        return None
+    elif unit_upper in ("HP", "CV"):
+        if value_str.strip() in HP_TO_WATTS:
+            watts = HP_TO_WATTS[value_str.strip()]
+        else:
+            factor = 746 if unit_upper == "HP" else 736
+            watts = int(num * factor)
+        if 30 <= watts <= 50000:
+            return f"{watts} W (≈ {value_str} {unit})"
+        return None
+    elif unit_upper == "VA":
+        watts = int(num * 0.8)
+        if 30 <= watts <= 50000:
+            return f"{watts} W (≈ {value_str} VA, FP 0.8)"
+        return None
+    elif unit_upper == "KVA":
+        watts = int(num * 1000 * 0.8)
+        if 30 <= watts <= 50000:
+            return f"{watts} W (≈ {value_str} kVA, FP 0.8)"
+        return None
+    elif unit_upper == "BTU" or unit_upper == "BTU/H":
+        raw = value_str.replace(".", "").replace(",", ".")
+        try:
+            btu = float(raw)
+        except ValueError:
+            return None
+        watts = int(btu * 0.29307)
+        if 30 <= watts <= 50000:
+            return f"{watts} W (≈ {value_str} BTU/h)"
+        return None
+    elif unit_upper in ("KCAL", "KCAL/H"):
+        raw = value_str.replace(".", "").replace(",", ".")
+        try:
+            kcal = float(raw)
+        except ValueError:
+            return None
+        watts = int(kcal * 1.163)
+        if 30 <= watts <= 50000:
+            return f"{watts} W (≈ {value_str} kcal/h)"
+        return None
     return None
 
 
 def find_power(text: str) -> Optional[str]:
-    for pattern in POWER_PATTERNS:
+    for pattern in POWER_PATTERNS_W:
         match = re.search(pattern, text)
         if match:
-            value = match.group(1).replace(",", ".")
-            try:
-                num = float(value)
-                if 30 <= num <= 10000:
-                    return f"{value} W"
-            except ValueError:
-                continue
+            result = _convert_to_watts(match.group(1), "W")
+            if result:
+                return result
+
+    for pattern in POWER_PATTERNS_KW:
+        match = re.search(pattern, text)
+        if match:
+            result = _convert_to_watts(match.group(1), "kW")
+            if result:
+                return result
 
     for pattern in HP_PATTERNS:
         match = re.search(pattern, text)
         if match:
-            result = _hp_to_watts(match.group(1))
+            result = _convert_to_watts(match.group(1), "HP")
+            if result:
+                return result
+
+    for pattern in CV_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            result = _convert_to_watts(match.group(1), "CV")
+            if result:
+                return result
+
+    for pattern in VA_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            val = match.group(1)
+            unit = "kVA" if re.search(r"[Kk][Vv][Aa]", match.group(0)) else "VA"
+            result = _convert_to_watts(val, unit)
+            if result:
+                return result
+
+    for pattern in BTU_AS_POWER_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            result = _convert_to_watts(match.group(1), "BTU")
             if result:
                 return result
 
     for pattern in KCAL_PATTERNS:
         match = re.search(pattern, text)
         if match:
-            raw = match.group(1).replace(".", "").replace(",", ".")
-            try:
-                kcal = float(raw)
-                if 500 <= kcal <= 500000:
-                    return f"{raw} kcal/h"
-            except ValueError:
-                continue
+            result = _convert_to_watts(match.group(1), "KCAL")
+            if result:
+                return result
 
     return None
 
