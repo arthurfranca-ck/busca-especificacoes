@@ -304,44 +304,49 @@ def enrich_with_ai(result: dict) -> dict:
     return result
 
 
+def _build_equip_dict(result: dict) -> dict:
+    """Monta dict com todos os campos relevantes para a IA."""
+    d = {}
+    for key in ["produto", "potencia_w", "voltagem_v", "fase", "consumo_kwh", "btu", "consumo_gas"]:
+        val = result.get(key)
+        if val:
+            d[key] = val
+        else:
+            d[key] = "NAO ENCONTRADO"
+    return d
+
+
 def analyze_single(result: dict) -> str:
     """Gera analise de IA para um equipamento."""
-    context = json.dumps({
-        "produto": result.get("produto"),
-        "potencia_w": result.get("potencia_w"),
-        "voltagem_v": result.get("voltagem_v"),
-        "fase": result.get("fase"),
-        "consumo_kwh": result.get("consumo_kwh"),
-        "btu": result.get("btu"),
-    }, ensure_ascii=False)
+    context = json.dumps(_build_equip_dict(result), ensure_ascii=False)
 
     return ask_gemini(
-        "Liste as especificacoes tecnicas deste equipamento de forma curta e direta:\n"
-        "- Potencia, Voltagem, Consumo, BTU\n"
-        "- Custo mensal estimado (tarifa R$0,75/kWh)\n"
-        "- Se faltar algum dado, de sua estimativa marcando com (estimativa)\n"
-        "5. Observacoes importantes",
+        "Liste APENAS as especificacoes tecnicas encontradas deste equipamento.\n"
+        "REGRAS:\n"
+        "- Mostre SOMENTE campos que tem valor real (diferente de NAO ENCONTRADO)\n"
+        "- Para campos NAO ENCONTRADO, escreva: 'Dado nao encontrado'\n"
+        "- NAO invente valores. NAO estime potencia, voltagem ou consumo\n"
+        "- Se tiver potencia real, calcule custo mensal: Potencia(kW) x 12h/dia x 30 dias x R$0,75/kWh\n"
+        "- Se NAO tiver potencia real, escreva: 'Custo: impossivel calcular (potencia nao encontrada)'\n"
+        "- Se for equipamento a gas, mostre o consumo de gas",
         context=context,
     )
 
 
 def compare_multiple(results: list[dict]) -> str:
     """Gera comparacao de IA entre multiplos equipamentos."""
-    items = []
-    for r in results:
-        items.append({
-            "produto": r.get("produto"),
-            "potencia_w": r.get("potencia_w"),
-            "voltagem_v": r.get("voltagem_v"),
-            "fase": r.get("fase"),
-            "consumo_kwh": r.get("consumo_kwh"),
-            "btu": r.get("btu"),
-        })
+    items = [_build_equip_dict(r) for r in results]
     context = json.dumps(items, ensure_ascii=False)
 
     return ask_gemini(
-        "Faca uma tabela comparativa curta com Potencia, Voltagem, Consumo, BTU e custo mensal estimado (R$0,75/kWh). "
-        "Indique o mais economico.",
+        "Faca uma tabela comparativa SOMENTE com dados reais encontrados.\n"
+        "REGRAS:\n"
+        "- Colunas: Equipamento | Potencia | Voltagem | Fase | Consumo kWh | BTU | Gas | Custo Mensal\n"
+        "- Para valores 'NAO ENCONTRADO', coloque '-' na celula\n"
+        "- NAO invente valores. NAO estime dados faltantes\n"
+        "- Custo mensal = Potencia(kW) x 12h/dia x 30 dias x R$0,75. Se potencia nao encontrada, coloque '-'\n"
+        "- No final, indique o mais economico SOMENTE se houver dados reais de potencia para comparar\n"
+        "- Se nenhum tiver potencia, escreva: 'Comparacao de custo impossivel - dados insuficientes'",
         context=context,
     )
 
