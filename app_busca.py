@@ -1,10 +1,20 @@
 """
 App de Busca de Especificacoes de Equipamentos (com IA)
 ========================================================
-Interface web (Streamlit) com busca automatica + assistente IA (Google Gemini).
+Interface web (Streamlit) com scraper + IA (Groq / Llama 3.3) + busca na web
+opcional (Tavily e/ou Exa).
 
 Uso:
     py -m streamlit run app_busca.py
+
+Variaveis de ambiente (ficheiro `.env` na mesma pasta — NAO commitar; esta no .gitignore):
+    GROQ_API_KEY      — obrigatorio para IA (Llama via Groq)
+    TAVILY_API_KEY    — opcional, busca na web (Tavily)
+    EXA_API_KEY       — opcional, busca na web (Exa)
+    GITHUB_TOKEN      — opcional, historico persistente no GitHub
+    GITHUB_REPO       — opcional, repo `don/o/repo` para o CSV de historico
+
+O codigo usa `_get_secret()` (os.environ + st.secrets). Chaves nunca ficam no repo.
 """
 
 import streamlit as st
@@ -126,6 +136,17 @@ if TAVILY_API_KEY:
     except Exception:
         pass
 
+EXA_API_KEY = _get_secret("EXA_API_KEY")
+exa_client = None
+if EXA_API_KEY:
+    try:
+        from exa_py import Exa
+        exa_client = Exa(api_key=EXA_API_KEY)
+    except Exception:
+        pass
+
+HAS_WEB_SEARCH = bool(tavily_client) or bool(exa_client)
+
 # ─── AI Setup (Groq / Llama) ─────────────────────────────────────────────────
 
 GROQ_API_KEY = _get_secret("GROQ_API_KEY")
@@ -176,7 +197,7 @@ def ask_gemini(prompt: str, context: str = "") -> str:
         return f"Erro ao consultar IA: {e}"
 
 
-def _tavily_search(produto: str, missing: list[str]) -> tuple[str, dict[str, str]]:
+def _tavily_search(produto: str, missing_keys: list[str]) -> tuple[str, dict[str, str]]:
     """Busca specs faltantes via Tavily. Retorna (conteudo, {campo: url_fonte})."""
     if not tavily_client:
         return "", {}
@@ -189,7 +210,7 @@ def _tavily_search(produto: str, missing: list[str]) -> tuple[str, dict[str, str
             "fase": "monofásico trifásico fase",
             "consumo_gas": "consumo gás kg/h m³/h",
         }
-        terms = " ".join(field_terms.get(f, f) for f in missing)
+        terms = " ".join(field_terms.get(f, f) for f in missing_keys)
         query = f"{produto} especificações técnicas {terms}"
         response = tavily_client.search(
             query=query,
@@ -198,16 +219,17 @@ def _tavily_search(produto: str, missing: list[str]) -> tuple[str, dict[str, str
             include_answer=True,
         )
         content_parts = []
-        sources = {}
+        sources: dict[str, str] = {}
         for r in response.get("results", []):
             url = r.get("url", "")
             text = r.get("content", "")
             if text:
                 content_parts.append(f"[Fonte: {url}]\n{text}")
                 if url:
-                    for field in missing:
-                        if field.lower() not in sources:
-                            sources[field.lower()] = url
+                    for field in missing_keys:
+                        fk = field.lower()
+                        if fk not in sources:
+                            sources[fk] = url
 
         answer = response.get("answer", "")
         if answer:
@@ -216,17 +238,88 @@ def _tavily_search(produto: str, missing: list[str]) -> tuple[str, dict[str, str
         top_url = ""
         if response.get("results"):
             top_url = response["results"][0].get("url", "")
-        for field in missing:
-            if field.lower() not in sources:
-                sources[field.lower()] = top_url
+        for field in missing_keys:
+            fk = field.lower()
+            if fk not in sources:
+                sources[fk] = top_url
 
         return "\n\n".join(content_parts), sources
     except Exception:
         return "", {}
 
 
+def _exa_search(produto: str, missing_keys: list[str]) -> tuple[str, dict[str, str]]:
+    """Busca neural + texto da pagina via Exa (complementa Tavily)."""
+    if not exa_client:
+        return "", {}
+    try:
+        field_terms = {
+            "potencia_w": "potência watts kW corrente amperes",
+            "voltagem_v": "voltagem tensão volts",
+            "consumo_kwh": "consumo energia kWh",
+            "btu": "BTU capacidade refrigeração",
+            "fase": "monofásico trifásico fase",
+            "consumo_gas": "consumo gás kg/h m³/h",
+        }
+        terms = " ".join(field_terms.get(f, f) for f in missing_keys)
+        query = f"{produto} especificações técnicas {terms}"
+        response = exa_client.search_and_contents(
+            query,
+            num_results=5,
+            text={"max_characters": 2000},
+        )
+        rows = getattr(response, "results", None) or []
+        content_parts = []
+        sources: dict[str, str] = {}
+        top_url = ""
+        for item in rows:
+            url = getattr(item, "url", "") or ""
+            text = getattr(item, "text", "") or ""
+            title = getattr(item, "title", "") or ""
+            if text:
+                head = f"[{title}]\n[Fonte: {url}]\n" if title else f"[Fonte: {url}]\n"
+                content_parts.append(head + text)
+            if url and not top_url:
+                top_url = url
+            if url:
+                for field in missing_keys:
+                    fk = field.lower()
+                    if fk not in sources:
+                        sources[fk] = url
+        for field in missing_keys:
+            fk = field.lower()
+            if fk not in sources:
+                sources[fk] = top_url
+
+        return "\n\n".join(content_parts), sources
+    except Exception:
+        return "", {}
+
+
+def _web_search_aggregated(produto: str, missing_keys: list[str]) -> tuple[str, dict[str, str]]:
+    """Junta Tavily e Exa: mais cobertura e URLs para fontes; dedup por campo."""
+    blocks = []
+    merged: dict[str, str] = {}
+
+    tv_text, tv_src = _tavily_search(produto, missing_keys)
+    if tv_text:
+        blocks.append("=== Tavily ===\n" + tv_text)
+    for k, v in tv_src.items():
+        if v:
+            merged[k] = v
+
+    ex_text, ex_src = _exa_search(produto, missing_keys)
+    if ex_text:
+        blocks.append("=== Exa ===\n" + ex_text)
+    for k, v in ex_src.items():
+        if v and k not in merged:
+            merged[k] = v
+
+    return "\n\n".join(blocks), merged
+
+
 def _map_field_source(field_label: str, sources: dict) -> str:
-    """Mapeia um label de campo para a URL fonte do Tavily."""
+    """Mapeia um label de campo para a URL fonte (Tavily/Exa)."""
     mappings = {
         "potencia_w": ["potencia (w)", "potencia"],
         "voltagem_v": ["voltagem (v)", "voltagem"],
@@ -241,7 +334,7 @@ def _map_field_source(field_label: str, sources: dict) -> str:
 
 
 def enrich_with_ai(result: dict) -> dict:
-    """Quando o scraper nao encontra specs, busca via Tavily + Groq."""
+    """Quando o scraper nao encontra specs, busca na web (Tavily e/ou Exa) + Groq."""
     field_labels = {
         "potencia_w": "Potencia (W, kW, HP, CV, VA ou corrente em Amperes)",
         "voltagem_v": "Voltagem (V)",
@@ -249,17 +342,14 @@ def enrich_with_ai(result: dict) -> dict:
         "consumo_kwh": "Consumo (kWh/mes, kWh/dia, kWh/ano)",
         "btu": "BTU (ou TR, kcal/h, kW frigorifico)",
     }
-    missing = []
-    for field, label in field_labels.items():
-        if not result.get(field):
-            missing.append(label)
-
-    if not missing:
+    missing_keys = [f for f in field_labels if not result.get(f)]
+    if not missing_keys:
         return result
+    missing_labels = [field_labels[k] for k in missing_keys]
 
     produto = result.get("produto", "")
 
-    tavily_content, tavily_sources = _tavily_search(produto, missing)
+    web_content, web_sources = _web_search_aggregated(produto, missing_keys)
 
     calc_hint = (
         "IMPORTANTE: Se encontrar corrente (Amperes) e voltagem mas NAO potencia em Watts, "
@@ -273,26 +363,24 @@ def enrich_with_ai(result: dict) -> dict:
 
     json_example = '{{"potencia_w": "150 W", "voltagem_v": "220 V", "fase": "Monofasico", "consumo_kwh": "45 kWh/mes", "btu": null}}'
 
-    if tavily_content and HAS_GEMINI:
+    if web_content and HAS_GEMINI:
         prompt = (
-            f"Analise os dados abaixo sobre o equipamento '{produto}' e extraia: {', '.join(missing)}.\n"
+            f"Analise os dados abaixo sobre o equipamento '{produto}' e extraia: {', '.join(missing_labels)}.\n"
             f"{calc_hint}\n"
-            f"Dados encontrados na internet:\n{tavily_content[:3000]}\n\n"
+            f"Dados encontrados na internet:\n{web_content[:5000]}\n\n"
             f"Responda APENAS em formato JSON com as chaves: "
             f"potencia_w, voltagem_v, fase, consumo_kwh, btu. "
             f"Se nao encontrar nos dados, coloque null. Exemplo: {json_example}"
         )
-        source_label = "IA + Fonte web"
     elif HAS_GEMINI:
         prompt = (
-            f"Para o equipamento '{produto}', nao consegui encontrar: {', '.join(missing)}. "
+            f"Para o equipamento '{produto}', nao consegui encontrar: {', '.join(missing_labels)}. "
             f"Com base no modelo e marca, estime os valores mais provaveis. "
             f"{calc_hint}\n"
             f"Responda APENAS em formato JSON com as chaves: "
             f"potencia_w, voltagem_v, fase, consumo_kwh, btu. "
             f"Se nao souber, coloque null. Exemplo: {json_example}"
         )
-        source_label = "Estimativa IA"
     else:
         return result
 
@@ -312,10 +400,10 @@ def enrich_with_ai(result: dict) -> dict:
             ]
             for field, fonte_field in fields:
                 if not enriched.get(field) and ai_data.get(field):
-                    tavily_url = _map_field_source(field, tavily_sources)
-                    if tavily_url:
+                    src_url = _map_field_source(field, web_sources)
+                    if src_url:
                         enriched[field] = str(ai_data[field])
-                        enriched[fonte_field] = tavily_url
+                        enriched[fonte_field] = src_url
                     else:
                         enriched[field] = f"{ai_data[field]} (estimativa IA)"
                         enriched[fonte_field] = "Estimativa IA"
@@ -502,7 +590,7 @@ with tab_single:
         pname = product_name.strip()
 
         ai_result = None
-        if tavily_client and HAS_GEMINI:
+        if HAS_WEB_SEARCH and HAS_GEMINI:
             with st.spinner(f"Buscando **{pname}** com IA (rapido)..."):
                 ai_result = enrich_with_ai({"produto": pname})
                 ai_elapsed = time.time() - start
@@ -651,7 +739,7 @@ with tab_batch:
                 start = time.time()
 
                 ai_res = None
-                if tavily_client and HAS_GEMINI:
+                if HAS_WEB_SEARCH and HAS_GEMINI:
                     ai_res = enrich_with_ai({"produto": prod})
 
                 result = cached_search(prod)
@@ -882,9 +970,13 @@ with st.sidebar:
     else:
         st.warning("IA desativada")
         st.caption("Adicione GROQ_API_KEY no .env")
+    st.markdown("##### Busca na web")
     if tavily_client:
-        st.success("Tavily ativo (fontes reais)")
+        st.success("Tavily: ativo (fontes reais)")
     else:
-        st.info("Tavily desativado")
-        st.caption("Adicione TAVILY_API_KEY nos Secrets")
+        st.caption("Tavily: desativado — defina `TAVILY_API_KEY` no `.env`")
+    if exa_client:
+        st.success("Exa: ativo (fontes reais)")
+    else:
+        st.caption("Exa: desativado — defina `EXA_API_KEY` no `.env` ([exa.ai](https://exa.ai))")
     st.caption("Busca de Especificacoes v2.1")
